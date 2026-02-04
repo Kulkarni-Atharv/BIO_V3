@@ -1,0 +1,9 @@
+opencv-contrib-python
+numpy
+requests
+fastapi
+uvicorn
+pyodbc
+paho-mqtt
+ujson
+python-multipart
