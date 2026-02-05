@@ -7,10 +7,11 @@ import os
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from device.modules.camera import Camera
-from device.modules.recognizer import FaceRecognizer
-from device.modules.database import LocalDatabase
-from device.modules.uploader import DataUploader
+
+from device.camera import Camera
+from core.recognizer import FaceRecognizer
+from device.database import LocalDatabase
+from device.uploader import DataUploader
 from shared.config import DEVICE_ID, KNOWN_FACES_DIR
 
 def main():

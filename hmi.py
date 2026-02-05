@@ -10,11 +10,12 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap, QFont
 
+
 # Import modules
-from device.modules.recognizer import FaceRecognizer
-from device.modules.database import LocalDatabase
-from encode_faces import FaceEncoder
-from shared.config import DEVICE_ID
+from core.recognizer import FaceRecognizer
+from device.database import LocalDatabase
+from core.face_encoder import FaceEncoder
+from shared.config import DEVICE_ID, KNOWN_FACES_DIR
 
 
 # --- Worker Thread for Video & Recognition ---
@@ -40,7 +41,6 @@ class VideoThread(QThread):
             self.recognizer = FaceRecognizer()
 
         # Try GStreamer first, fallback to 0
-        # ... (rest of logic same)
         gst_pipeline = (
             "libcamerasrc ! video/x-raw, width=640, height=480, framerate=30/1 ! "
             "videoconvert ! videoscale ! video/x-raw, format=BGR ! appsink"
@@ -112,7 +112,7 @@ class VideoThread(QThread):
 
     def start_capture(self, user_id, user_name):
         self.capture_id = user_id
-        self.capture_dir = f"known_faces/{user_id}_{user_name}"
+        self.capture_dir = os.path.join(KNOWN_FACES_DIR, f"{user_id}_{user_name}")
         if not os.path.exists(self.capture_dir):
             os.makedirs(self.capture_dir)
         
@@ -215,7 +215,7 @@ class MainApp(QMainWindow):
 
     def delete_user_action(self):
         # List users from known_faces directory
-        known_faces_dir = "known_faces"
+        known_faces_dir = KNOWN_FACES_DIR
         if not os.path.exists(known_faces_dir):
             QMessageBox.warning(self, "Error", "No known_faces directory found.")
             return
