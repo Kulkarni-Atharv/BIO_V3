@@ -2,22 +2,18 @@
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
 venv/
-env/
+.env
 
-# Data & Logs
-attendance_buffer.db
-*.log
-*.sqlite
-trainer.yml
-names.json
+# Database
+*.db
+*.sqlite3
 
-# Media
+# Models (Download via script)
+*.onnx
+
+# Data (Privacy)
 known_faces/
-*.jpg
-*.png
-*.mp4
 
-# OS
-.DS_Store
+# Logs
+*.log
