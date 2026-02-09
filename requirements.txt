@@ -7,3 +7,5 @@ paho-mqtt
 ujson
 python-multipart
 PyQt5
+opencv-python
+mysql-connector-python

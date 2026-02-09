@@ -14,6 +14,14 @@ SERVER_DB_PATH = os.path.join(DATA_DIR, "server_attendance.db")
 
 # Device Configuration
 DEVICE_ID = "cm4_device_001"
+
+# MySQL Configuration
+MYSQL_HOST = "127.0.0.1" # REPLACE WITH YOUR LAPTOP IP
+MYSQL_USER = "root"
+MYSQL_PASSWORD = "Atharv@123" # REPLACE WITH YOUR PASSWORD
+MYSQL_DB = "bio_attendance"
+MYSQL_PORT = 3306
+
 DB_PATH = os.path.join(DATA_DIR, "attendance_buffer.db")
 KNOWN_FACES_DIR = os.path.join(DATA_DIR, "known_faces")
 
