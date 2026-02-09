@@ -90,8 +90,9 @@ class VideoThread(QThread):
                 # Get frame from appropriate source
                 if use_picamera2:
                     cv_img = picam2.capture_array()
-                    # picamera2 with RGB888 gives RGB, convert to BGR for OpenCV
-                    cv_img = cv2.cvtColor(cv_img, cv2.COLOR_RGB2BGR)
+                    # picamera2 typically returns BGR or we should rely on Qt conversion later
+                    # If previously swapped, let's remove the forced swap.
+                    # cv_img = cv2.cvtColor(cv_img, cv2.COLOR_RGB2BGR)
                     ret = True
                 else:
                     ret, cv_img = cap.read()
