@@ -93,8 +93,8 @@ class FaceEncoder:
                     new_images.append(path)
 
         if not new_images:
-            logger.warning("No images found.")
-            return True # Not a failure, just empty
+            # Even if no new images, we must run Garbage Collection to remove deleted users
+            pass
 
         # 2. Re-process ALL (Robust Fix) or Incremental?
         # User wants "1000 users". Full re-process is NOT viable.
@@ -114,13 +114,47 @@ class FaceEncoder:
             with open(processed_log_path, 'r') as f:
                 processed_files = set(json.load(f))
 
+        # --- GARBAGE COLLECTION START ---
+        # 1. Identify valid users (folders that exist)
+        valid_users = set()
+        for d in os.listdir(self.known_faces_dir):
+            if os.path.isdir(os.path.join(self.known_faces_dir, d)):
+                # Extract user name from folder "ID_Name" or "Name"
+                if "_" in d:
+                    valid_users.add(d.split('_')[1])
+                else:
+                    valid_users.add(d)
+        
+        # 2. Filter existing embeddings
+        # We only have `known_names`. We must keep indices where name is in valid_users.
+        # This is strictly for removing DELETED users.
+        
+        initial_count = len(self.known_names)
+        filtered_embeddings = []
+        filtered_names = []
+        
+        for emb, name in zip(self.known_embeddings, self.known_names):
+             if name in valid_users:
+                 filtered_embeddings.append(emb)
+                 filtered_names.append(name)
+        
+        deleted_count = initial_count - len(filtered_names)
+        if deleted_count > 0:
+            logger.info(f"Garbage Collection: Removed {deleted_count} embeddings for deleted users.")
+            # Update lists
+            self.known_embeddings = filtered_embeddings
+            self.known_names = filtered_names
+        
+        # --- GARBAGE COLLECTION END ---
+
         images_to_process = [img for img in new_images if img not in processed_files]
         
-        if not images_to_process:
-            logger.info("No new images to process.")
+        if not images_to_process and deleted_count == 0:
+            logger.info("No new images to process and no deleted users.")
             return True
 
-        logger.info(f"Found {len(images_to_process)} new images.")
+        if images_to_process:
+            logger.info(f"Found {len(images_to_process)} new images.")
         
         count = 0
         for img_path in images_to_process:
@@ -135,7 +169,7 @@ class FaceEncoder:
                 logger.error(f"Error processing {img_path}: {e}")
 
         # 3. Save Updates
-        if count > 0:
+        if count > 0 or deleted_count > 0:
             np.save(self.embeddings_file, np.array(self.known_embeddings))
             with open(self.names_file, 'w') as f:
                 json.dump(self.known_names, f)
@@ -143,7 +177,7 @@ class FaceEncoder:
             with open(processed_log_path, 'w') as f:
                 json.dump(list(processed_files), f)
                 
-            logger.info(f"Added {count} new embeddings. Total: {len(self.known_embeddings)}")
+            logger.info(f"Changes saved. Added: {count}, Deleted: {deleted_count}. Total: {len(self.known_embeddings)}")
         
         return True
 
