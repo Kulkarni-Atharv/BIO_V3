@@ -60,8 +60,10 @@ class VideoThread(QThread):
                 config = picam2.create_preview_configuration(main={"size": (640, 480), "format": "RGB888"})
                 picam2.configure(config)
                 picam2.start()
+                # Set controls to ensure color
+                picam2.set_controls({"AeEnable": True, "AwbEnable": True, "Saturation": 1.0, "AwbMode": 1}) # 1=Auto
                 use_picamera2 = True
-                print("Using picamera2 for CSI camera")
+                print("Using picamera2 for CSI camera (Color Mode Enabled)")
             except Exception as e:
                 print(f"picamera2 failed: {e}")
                 use_picamera2 = False
