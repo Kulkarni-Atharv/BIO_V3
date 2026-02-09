@@ -102,7 +102,10 @@ class VideoThread(QThread):
                         if self.recognizer:
                             locations, names = self.recognizer.recognize_faces(cv_img)
                             # Draw and Emit
-                            for (top, right, bottom, left), name in zip(locations, names):
+                            # Recognizer now returns (x, y, w, h)
+                            for (x, y, w, h), name in zip(locations, names):
+                                left, top, right, bottom = x, y, x+w, y+h
+                                
                                 if name != "Unknown":
                                     # Multi-frame verification
                                     if name == last_recognized_name:
@@ -117,7 +120,7 @@ class VideoThread(QThread):
                                         color = (0, 255, 0) # Green
                                         
                                         now = time.time()
-                                        if name not in last_attendance_time or (now - last_attendance_time[name] > COOLDOWN):
+                                        if name not in last_attendance_time or (now - last_attendance_time.get(name, 0) > COOLDOWN):
                                             self.attendance_signal.emit(name)
                                             last_attendance_time[name] = now
                                     else:

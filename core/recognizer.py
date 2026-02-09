@@ -3,18 +3,31 @@ import os
 import json
 import logging
 import numpy as np
+import sys
+
+# Add project root to path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Setup Logger
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("Recognizer")
 
 from shared.config import (
     YUNET_PATH, MOBILEFACENET_PATH, 
-    EMBEDDINGS_FILE, NAMES_FILE, KNOWN_FACES_DIR,
+    EMBEDDINGS_FILE, NAMES_FILE,
     DETECTION_THRESHOLD, RECOGNITION_THRESHOLD
 )
 
-logger = logging.getLogger("Recognizer")
+# [NEW] Import Aligner
+try:
+    from core.alignment import StandardFaceAligner
+    aligner = StandardFaceAligner()
+except ImportError:
+    aligner = None
+
 
 class FaceRecognizer:
-    def __init__(self, known_faces_dir=KNOWN_FACES_DIR):
-        self.known_faces_dir = known_faces_dir
+    def __init__(self):
         self.yunet_path = YUNET_PATH
         self.mobilefacenet_path = MOBILEFACENET_PATH
         self.embeddings_file = EMBEDDINGS_FILE
@@ -24,49 +37,42 @@ class FaceRecognizer:
         self.recognizer = None
         self.known_embeddings = []
         self.known_names = []
-        self.is_trained = False
         
         self._load_models()
-        self._load_embeddings()
+        self._load_database()
 
     def _load_models(self):
-        if os.path.exists(self.yunet_path) and os.path.exists(self.mobilefacenet_path):
-            try:
-                # Initialize YuNet
-                self.detector = cv2.FaceDetectorYN.create(
-                    self.yunet_path, "", (320, 320), DETECTION_THRESHOLD, 0.3, 5000
-                )
-                # Initialize MobileFaceNet
-                self.recognizer = cv2.dnn.readNetFromONNX(self.mobilefacenet_path)
-                logger.info("Models loaded successfully.")
-            except Exception as e:
-                logger.error(f"Failed to load models: {e}")
-        else:
-            logger.error("ONNX models not found. Please run download_models.py")
+        if not os.path.exists(self.yunet_path) or not os.path.exists(self.mobilefacenet_path):
+            logger.error("Models not found.")
+            return
 
-    def _load_embeddings(self):
+        self.detector = cv2.FaceDetectorYN.create(
+            self.yunet_path, "", (320, 320), DETECTION_THRESHOLD, 0.3, 5000
+        )
+        self.recognizer = cv2.dnn.readNetFromONNX(self.mobilefacenet_path)
+        logger.info("Models loaded successfully.")
+
+    def _load_database(self):
         if os.path.exists(self.embeddings_file) and os.path.exists(self.names_file):
             try:
                 self.known_embeddings = np.load(self.embeddings_file)
                 with open(self.names_file, 'r') as f:
                     self.known_names = json.load(f)
-                
-                if len(self.known_embeddings) > 0:
-                    self.is_trained = True
-                    logger.info(f"Loaded {len(self.known_embeddings)} embeddings.")
+                logger.info(f"Loaded {len(self.known_embeddings)} identities.")
             except Exception as e:
-                logger.error(f"Failed to load embeddings: {e}")
+                logger.error(f"Failed to load database: {e}")
+                self.known_embeddings = []
+                self.known_names = []
         else:
-            logger.warning("No embeddings found. Dictionary will be empty.")
+            logger.warning("No database found.")
 
     def recognize_faces(self, frame):
-        if self.detector is None:
+        if self.detector is None or self.recognizer is None:
             return [], []
 
         h, w, _ = frame.shape
         self.detector.setInputSize((w, h))
-
-        # Detect
+        
         _, faces = self.detector.detect(frame)
         
         face_locations = []
@@ -74,41 +80,19 @@ class FaceRecognizer:
 
         if faces is not None:
             for face in faces:
-                # YuNet returns [x, y, w, h, ...]
+                # Bounding Box
                 box = face[:4].astype(int)
                 x, y, w_box, h_box = box[0], box[1], box[2], box[3]
                 
-                # Ensure bounds
-                x = max(0, x)
-                y = max(0, y)
-                w_box = min(w_box, w - x)
-                h_box = min(h_box, h - y)
-
-                if w_box <= 0 or h_box <= 0:
-                    continue
-
-                # Prepare return format (top, right, bottom, left) used by main.py
-                top, right, bottom, left = y, x + w_box, y + h_box, x
-                face_locations.append((top, right, bottom, left))
-
-                name = "Unknown"
-                if self.is_trained:
+                # Landmarks for alignment
+                landmarks = face[4:14].reshape((5, 2))
+                
+                face_locations.append((x, y, w_box, h_box))
+                
+                # Alignment
+                face_img = None
+                if aligner:
                     try:
-                        face_img = frame[y:y+h_box, x:x+w_box]
-                        
-                        # Preprocess
-                        blob = cv2.dnn.blobFromImage(face_img, 1.0/128.0, (112, 112), (127.5, 127.5, 127.5), swapRB=True)
-                        self.recognizer.setInput(blob)
-                        embedding = self.recognizer.forward()
-                        
-                        # Normalize
-                        embedding_norm = cv2.normalize(embedding, None, alpha=1, beta=0, norm_type=cv2.NORM_L2).flatten()
-                        
-                        # Compare with known
-                        # Dot product of normalized vectors = Cosine Similarity
-                        scores = np.dot(self.known_embeddings, embedding_norm)
-                        best_idx = np.argmax(scores)
-                        max_score = scores[best_idx]
                         
                         # Threshold (Tunable: 0.5 is safe, 0.6 is stricter)
                         if max_score > RECOGNITION_THRESHOLD:
