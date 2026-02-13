@@ -219,6 +219,11 @@ class VideoThread(QThread):
     def process_recognition(self, img, last_name, consecutive):
         if self.recognizer is None:
             return
+        
+        # Guard against mode change mid-processing
+        if self.get_mode() != "RECOGNITION":
+            return
+
         try:
             locations, names = self.recognizer.recognize_faces(img)
         except Exception as e:
@@ -759,12 +764,12 @@ class MainApp(QMainWindow):
     def switch_screen(self, index):
         self.central_widget.setCurrentIndex(index)
         if index == 0:
-            self.thread.mode = "RECOGNITION"
+            self.thread.set_mode("RECOGNITION")
         elif index == 2: # Register
-            self.thread.mode = "IDLE" 
+            self.thread.set_mode("IDLE") 
         else:
             # Settings, Delete, About -> IDLE
-            self.thread.mode = "IDLE"
+            self.thread.set_mode("IDLE")
 
     def refresh_delete_list_and_show(self):
         self.delete_list.clear()
@@ -894,6 +899,7 @@ class MainApp(QMainWindow):
         self.btn_cancel_reg.show()
         self.progress_ring.hide()
         self.lbl_status.setText("Ready")
+        self.thread.set_mode("IDLE")  # Ensure we stop scanning when resetting
 
     def closeEvent(self, event):
         self.thread.stop()
