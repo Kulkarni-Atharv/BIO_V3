@@ -217,11 +217,12 @@ class VideoThread(QThread):
 
             h, w, ch = rgb_img.shape
             bytes_per_line = ch * w
-            qt_img = QImage(rgb_img.data, w, h, bytes_per_line, QImage.Format_RGB888)
+            # Copy is CRITICAL for thread safety with numpy data
+            qt_img = QImage(rgb_img.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
             self.change_pixmap_signal.emit(qt_img)
             
-            # Important: Prevent CPU starvation
-            self.msleep(10)
+            # Important: Prevent CPU starvation (30ms for ~33FPS max)
+            self.msleep(30)
 
         # Cleanup
         if use_picamera2: picam2.stop()
