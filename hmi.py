@@ -414,60 +414,132 @@ class MainApp(QMainWindow):
 
     def init_settings_screen(self):
         self.settings_widget = QWidget()
-        layout = QVBoxLayout(self.settings_widget)
-        layout.setContentsMargins(50, 50, 50, 50)
-        layout.setSpacing(30)
+        main_layout = QVBoxLayout(self.settings_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
         
-        # Header
-        header = QHBoxLayout()
-        btn_back = QPushButton(" Back")
-        btn_back.setFixedWidth(120)
-        btn_back.setStyleSheet("background-color: #313244; color: #cdd6f4;")
+        # Top Bar (matching Home screen sidebar style)
+        top_bar = QFrame()
+        top_bar.setStyleSheet("background-color: #1e1e2e; border-bottom: 1px solid #45475a;")
+        top_bar.setFixedHeight(100)
+        top_bar_layout = QHBoxLayout(top_bar)
+        top_bar_layout.setContentsMargins(50, 20, 50, 20)
+        
+        btn_back = QPushButton("← Back")
+        btn_back.setFixedSize(120, 50)
+        btn_back.setStyleSheet("""
+            QPushButton {
+                background-color: #313244; 
+                color: #cdd6f4;
+                border-radius: 10px;
+                font-size: 16px;
+            }
+            QPushButton:hover { background-color: #45475a; }
+        """)
         btn_back.clicked.connect(lambda: self.switch_screen(0))
         
-        lbl_title = QLabel("System Settings")
-        lbl_title.setFont(QFont("Segoe UI", 32, QFont.Bold))
-        lbl_title.setStyleSheet("color: #89b4fa;")
+        lbl_title = QLabel("Settings")
+        lbl_title.setFont(QFont("Segoe UI", 36, QFont.Bold))
+        lbl_title.setStyleSheet("color: #cdd6f4;")
         
-        header.addWidget(btn_back)
-        header.addStretch()
-        header.addWidget(lbl_title)
-        header.addStretch()
-        # Balance spacer
-        dummy = QLabel(); dummy.setFixedWidth(120); header.addWidget(dummy)
+        top_bar_layout.addWidget(btn_back)
+        top_bar_layout.addStretch()
+        top_bar_layout.addWidget(lbl_title)
+        top_bar_layout.addStretch()
         
-        layout.addLayout(header)
-        layout.addSpacing(50)
+        main_layout.addWidget(top_bar)
         
-        # Grid Menu
-        grid = QGridLayout()
-        grid.setSpacing(30)
+        # Content Area
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(80, 60, 80, 60)
+        content_layout.setSpacing(30)
         
-        btn_add = QPushButton("Add User")
-        btn_add.setFixedSize(250, 150)
-        btn_add.clicked.connect(lambda: self.switch_screen(2))
+        # Settings Cards
+        cards_layout = QVBoxLayout()
+        cards_layout.setSpacing(20)
         
-        btn_del = QPushButton("Delete User")
-        btn_del.setFixedSize(250, 150)
-        btn_del.setStyleSheet("background-color: #f38ba8; color: #1e1e2e;")
-        btn_del.clicked.connect(self.refresh_delete_list_and_show)
+        # Add User Card
+        add_card = self.create_settings_card(
+            "👤 Add New User",
+            "Register a new employee for attendance tracking",
+            "#89b4fa",
+            lambda: self.switch_screen(2)
+        )
         
-        btn_about = QPushButton("About System")
-        btn_about.setFixedSize(250, 150)
-        btn_about.setStyleSheet("background-color: #a6e3a1; color: #1e1e2e;")
-        btn_about.clicked.connect(self.show_about_screen)
+        # Delete User Card
+        del_card = self.create_settings_card(
+            "🗑️ Delete User",
+            "Remove an employee from the system",
+            "#f38ba8",
+            self.refresh_delete_list_and_show
+        )
         
-        grid.addWidget(btn_add, 0, 0)
-        grid.addWidget(btn_del, 0, 1)
-        grid.addWidget(btn_about, 0, 2)
+        # About Card
+        about_card = self.create_settings_card(
+            "ℹ️ About System",
+            "View device information and network settings",
+            "#a6e3a1",
+            self.show_about_screen
+        )
         
-        # Center the grid
-        grid_container = QWidget()
-        grid_container.setLayout(grid)
-        layout.addWidget(grid_container, alignment=Qt.AlignCenter)
-        layout.addStretch()
+        cards_layout.addWidget(add_card)
+        cards_layout.addWidget(del_card)
+        cards_layout.addWidget(about_card)
+        cards_layout.addStretch()
+        
+        content_layout.addLayout(cards_layout)
+        main_layout.addWidget(content)
         
         self.central_widget.addWidget(self.settings_widget)
+    
+    def create_settings_card(self, title, description, accent_color, callback):
+        """Create a professional settings card"""
+        card = QFrame()
+        card.setFixedHeight(100)
+        card.setStyleSheet(f"""
+            QFrame {{
+                background-color: #313244;
+                border-radius: 15px;
+                border-left: 5px solid {accent_color};
+            }}
+            QFrame:hover {{
+                background-color: #45475a;
+            }}
+        """)
+        card.setCursor(Qt.PointingHandCursor)
+        
+        card_layout = QHBoxLayout(card)
+        card_layout.setContentsMargins(30, 20, 30, 20)
+        
+        # Text content
+        text_layout = QVBoxLayout()
+        text_layout.setSpacing(5)
+        
+        lbl_title = QLabel(title)
+        lbl_title.setFont(QFont("Segoe UI", 20, QFont.Bold))
+        lbl_title.setStyleSheet("color: #cdd6f4;")
+        
+        lbl_desc = QLabel(description)
+        lbl_desc.setFont(QFont("Segoe UI", 14))
+        lbl_desc.setStyleSheet("color: #a6adc8;")
+        
+        text_layout.addWidget(lbl_title)
+        text_layout.addWidget(lbl_desc)
+        
+        # Arrow
+        lbl_arrow = QLabel("→")
+        lbl_arrow.setFont(QFont("Segoe UI", 32))
+        lbl_arrow.setStyleSheet(f"color: {accent_color};")
+        
+        card_layout.addLayout(text_layout)
+        card_layout.addStretch()
+        card_layout.addWidget(lbl_arrow)
+        
+        # Make clickable
+        card.mousePressEvent = lambda e: callback()
+        
+        return card
 
     def init_register_screen(self):
         self.reg_widget = QWidget()
@@ -494,7 +566,7 @@ class MainApp(QMainWindow):
         
         self.btn_cancel_reg = QPushButton("Cancel")
         self.btn_cancel_reg.setStyleSheet("background-color: #fab387; color: #1e1e2e;")
-        self.btn_cancel_reg.clicked.connect(lambda: self.switch_screen(1)) # Back to Settings
+        self.btn_cancel_reg.clicked.connect(lambda: self.switch_screen(1))
         
         self.progress_ring = CircularProgress()
         self.progress_ring.hide()
@@ -515,7 +587,7 @@ class MainApp(QMainWindow):
         
         # Right: Camera Preview
         self.video_label_reg = QLabel()
-        self.video_label_reg.setFixedSize(480, 640) 
+        self.video_label_reg.setFixedSize(480, 640)
         self.video_label_reg.setStyleSheet("background-color: black; border-radius: 20px;")
         self.video_label_reg.setScaledContents(True)
 
@@ -526,89 +598,177 @@ class MainApp(QMainWindow):
 
     def init_delete_screen(self):
         self.del_widget = QWidget()
-        layout = QVBoxLayout(self.del_widget)
-        layout.setContentsMargins(50, 50, 50, 50)
+        main_layout = QVBoxLayout(self.del_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Header
-        header = QHBoxLayout()
-        btn_back = QPushButton(" Back")
-        btn_back.setFixedWidth(120)
+        # Top Bar
+        top_bar = QFrame()
+        top_bar.setStyleSheet("background-color: #1e1e2e; border-bottom: 1px solid #45475a;")
+        top_bar.setFixedHeight(100)
+        top_bar_layout = QHBoxLayout(top_bar)
+        top_bar_layout.setContentsMargins(50, 20, 50, 20)
+        
+        btn_back = QPushButton("← Back")
+        btn_back.setFixedSize(120, 50)
+        btn_back.setStyleSheet("""
+            QPushButton {
+                background-color: #313244;
+                color: #cdd6f4;
+                border-radius: 10px;
+                font-size: 16px;
+            }
+            QPushButton:hover { background-color: #45475a; }
+        """)
         btn_back.clicked.connect(lambda: self.switch_screen(1))
         
         lbl_title = QLabel("Delete User")
-        lbl_title.setFont(QFont("Segoe UI", 32, QFont.Bold))
+        lbl_title.setFont(QFont("Segoe UI", 36, QFont.Bold))
         lbl_title.setStyleSheet("color: #f38ba8;")
         
-        header.addWidget(btn_back)
-        header.addStretch()
-        header.addWidget(lbl_title)
-        header.addStretch()
-        dummy = QLabel(); dummy.setFixedWidth(120); header.addWidget(dummy)
+        top_bar_layout.addWidget(btn_back)
+        top_bar_layout.addStretch()
+        top_bar_layout.addWidget(lbl_title)
+        top_bar_layout.addStretch()
         
-        layout.addLayout(header)
-        layout.addSpacing(30)
+        main_layout.addWidget(top_bar)
         
-        # List
+        # Content
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(80, 40, 80, 40)
+        content_layout.setSpacing(20)
+        
+        lbl_instruction = QLabel("Select a user to remove from the system")
+        lbl_instruction.setFont(QFont("Segoe UI", 16))
+        lbl_instruction.setStyleSheet("color: #a6adc8;")
+        content_layout.addWidget(lbl_instruction)
+        
         self.delete_list = QListWidget()
-        self.delete_list.setFont(QFont("Segoe UI", 16))
-        layout.addWidget(self.delete_list)
+        self.delete_list.setFont(QFont("Segoe UI", 18))
+        self.delete_list.setStyleSheet("""
+            QListWidget {
+                background-color: #313244;
+                border-radius: 15px;
+                padding: 15px;
+            }
+            QListWidget::item {
+                padding: 15px;
+                border-bottom: 1px solid #45475a;
+                border-radius: 8px;
+            }
+            QListWidget::item:selected {
+                background-color: #45475a;
+            }
+            QListWidget::item:hover {
+                background-color: #3a3a4a;
+            }
+        """)
+        content_layout.addWidget(self.delete_list)
         
         btn_confirm_del = QPushButton("Delete Selected User")
-        btn_confirm_del.setStyleSheet("background-color: #f38ba8; color: #1e1e2e;")
+        btn_confirm_del.setFixedHeight(60)
+        btn_confirm_del.setStyleSheet("""
+            QPushButton {
+                background-color: #f38ba8;
+                color: #1e1e2e;
+                border-radius: 15px;
+                font-size: 18px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #f5c2e7; }
+        """)
         btn_confirm_del.clicked.connect(self.delete_selected_user)
-        layout.addWidget(btn_confirm_del)
+        content_layout.addWidget(btn_confirm_del)
         
+        main_layout.addWidget(content)
         self.central_widget.addWidget(self.del_widget)
 
     def init_about_screen(self):
         self.about_widget = QWidget()
-        layout = QVBoxLayout(self.about_widget)
-        layout.setContentsMargins(50, 50, 50, 50)
+        main_layout = QVBoxLayout(self.about_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Header
-        header = QHBoxLayout()
-        btn_back = QPushButton(" Back")
-        btn_back.setFixedWidth(120)
+        # Top Bar
+        top_bar = QFrame()
+        top_bar.setStyleSheet("background-color: #1e1e2e; border-bottom: 1px solid #45475a;")
+        top_bar.setFixedHeight(100)
+        top_bar_layout = QHBoxLayout(top_bar)
+        top_bar_layout.setContentsMargins(50, 20, 50, 20)
+        
+        btn_back = QPushButton("← Back")
+        btn_back.setFixedSize(120, 50)
+        btn_back.setStyleSheet("""
+            QPushButton {
+                background-color: #313244;
+                color: #cdd6f4;
+                border-radius: 10px;
+                font-size: 16px;
+            }
+            QPushButton:hover { background-color: #45475a; }
+        """)
         btn_back.clicked.connect(lambda: self.switch_screen(1))
         
         lbl_title = QLabel("About System")
-        lbl_title.setFont(QFont("Segoe UI", 32, QFont.Bold))
+        lbl_title.setFont(QFont("Segoe UI", 36, QFont.Bold))
+        lbl_title.setStyleSheet("color: #a6e3a1;")
         
-        header.addWidget(btn_back)
-        header.addStretch()
-        header.addWidget(lbl_title)
-        header.addStretch()
-        dummy = QLabel(); dummy.setFixedWidth(120); header.addWidget(dummy)
+        top_bar_layout.addWidget(btn_back)
+        top_bar_layout.addStretch()
+        top_bar_layout.addWidget(lbl_title)
+        top_bar_layout.addStretch()
         
-        layout.addLayout(header)
-        layout.addSpacing(50)
+        main_layout.addWidget(top_bar)
         
-        # Info Box
-        info_box = QFrame()
-        info_box.setStyleSheet("background-color: #313244; border-radius: 20px;")
-        info_layout = QVBoxLayout(info_box)
-        info_layout.setContentsMargins(40, 40, 40, 40)
-        info_layout.setSpacing(20)
+        # Content
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(80, 60, 80, 60)
+        content_layout.setSpacing(30)
         
-        self.lbl_ip = QLabel("IP Address: Loading...")
-        self.lbl_ip.setFont(QFont("Segoe UI", 24))
+        # Info Cards
+        ip_card = self.create_info_card("Network Address", "Loading...", "#89b4fa")
+        self.lbl_ip = ip_card.findChild(QLabel, "value_label")
         
-        lbl_dev = QLabel(f"Device ID: {DEVICE_ID}")
-        lbl_dev.setFont(QFont("Segoe UI", 24))
+        dev_card = self.create_info_card("Device ID", DEVICE_ID, "#a6e3a1")
+        ver_card = self.create_info_card("Software Version", "2.0.0 (Kiosk Edition)", "#f9e2af")
         
-        lbl_ver = QLabel("Version: 2.0.0 (Kiosk Edition)")
-        lbl_ver.setFont(QFont("Segoe UI", 18))
-        lbl_ver.setStyleSheet("color: #a6adc8;")
+        content_layout.addWidget(ip_card)
+        content_layout.addWidget(dev_card)
+        content_layout.addWidget(ver_card)
+        content_layout.addStretch()
         
-        info_layout.addWidget(self.lbl_ip)
-        info_layout.addWidget(lbl_dev)
-        info_layout.addWidget(lbl_ver)
-        info_layout.addStretch()
-        
-        layout.addWidget(info_box)
-        layout.addStretch()
-        
+        main_layout.addWidget(content)
         self.central_widget.addWidget(self.about_widget)
+    
+    def create_info_card(self, label, value, accent_color):
+        """Create a professional info display card"""
+        card = QFrame()
+        card.setFixedHeight(120)
+        card.setStyleSheet(f"""
+            QFrame {{
+                background-color: #313244;
+                border-radius: 15px;
+                border-left: 5px solid {accent_color};
+            }}
+        """)
+        
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(30, 20, 30, 20)
+        card_layout.setSpacing(10)
+        
+        lbl_label = QLabel(label)
+        lbl_label.setFont(QFont("Segoe UI", 14))
+        lbl_label.setStyleSheet("color: #a6adc8;")
+        
+        lbl_value = QLabel(value)
+        lbl_value.setObjectName("value_label")
+        lbl_value.setFont(QFont("Segoe UI", 22, QFont.Bold))
+        lbl_value.setStyleSheet(f"color: {accent_color};")
+        
+        card_layout.addWidget(lbl_label)
+        card_layout.addWidget(lbl_value)
+        
+        return card
 
     def update_clock(self):
         now = datetime.now()
