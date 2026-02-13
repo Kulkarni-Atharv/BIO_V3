@@ -418,7 +418,7 @@ class MainApp(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
         
-        # Top Bar (matching Home screen sidebar style)
+        # Top Bar
         top_bar = QFrame()
         top_bar.setStyleSheet("background-color: #1e1e2e; border-bottom: 1px solid #45475a;")
         top_bar.setFixedHeight(100)
@@ -449,97 +449,58 @@ class MainApp(QMainWindow):
         
         main_layout.addWidget(top_bar)
         
-        # Content Area
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(80, 60, 80, 60)
-        content_layout.setSpacing(30)
+        # Simple List Menu (Mobile Style)
+        menu_container = QWidget()
+        menu_layout = QVBoxLayout(menu_container)
+        menu_layout.setContentsMargins(0, 0, 0, 0)
+        menu_layout.setSpacing(0)
         
-        # Settings Cards
-        cards_layout = QVBoxLayout()
-        cards_layout.setSpacing(20)
+        # Menu Items
+        add_item = self.create_menu_item("👤  Add New User", "#89b4fa", lambda: self.switch_screen(2))
+        del_item = self.create_menu_item("🗑️  Delete User", "#f38ba8", self.refresh_delete_list_and_show)
+        about_item = self.create_menu_item("ℹ️  About System", "#a6e3a1", self.show_about_screen)
         
-        # Add User Card
-        add_card = self.create_settings_card(
-            "👤 Add New User",
-            "Register a new employee for attendance tracking",
-            "#89b4fa",
-            lambda: self.switch_screen(2)
-        )
+        menu_layout.addWidget(add_item)
+        menu_layout.addWidget(del_item)
+        menu_layout.addWidget(about_item)
+        menu_layout.addStretch()
         
-        # Delete User Card
-        del_card = self.create_settings_card(
-            "🗑️ Delete User",
-            "Remove an employee from the system",
-            "#f38ba8",
-            self.refresh_delete_list_and_show
-        )
-        
-        # About Card
-        about_card = self.create_settings_card(
-            "ℹ️ About System",
-            "View device information and network settings",
-            "#a6e3a1",
-            self.show_about_screen
-        )
-        
-        cards_layout.addWidget(add_card)
-        cards_layout.addWidget(del_card)
-        cards_layout.addWidget(about_card)
-        cards_layout.addStretch()
-        
-        content_layout.addLayout(cards_layout)
-        main_layout.addWidget(content)
-        
+        main_layout.addWidget(menu_container)
         self.central_widget.addWidget(self.settings_widget)
     
-    def create_settings_card(self, title, description, accent_color, callback):
-        """Create a professional settings card"""
-        card = QFrame()
-        card.setFixedHeight(100)
-        card.setStyleSheet(f"""
+    def create_menu_item(self, text, accent_color, callback):
+        """Create a simple mobile-style menu item"""
+        item = QFrame()
+        item.setFixedHeight(80)
+        item.setStyleSheet(f"""
             QFrame {{
-                background-color: #313244;
-                border-radius: 15px;
-                border-left: 5px solid {accent_color};
+                background-color: #1e1e2e;
+                border-bottom: 1px solid #45475a;
             }}
             QFrame:hover {{
-                background-color: #45475a;
+                background-color: #313244;
             }}
         """)
-        card.setCursor(Qt.PointingHandCursor)
+        item.setCursor(Qt.PointingHandCursor)
         
-        card_layout = QHBoxLayout(card)
-        card_layout.setContentsMargins(30, 20, 30, 20)
+        layout = QHBoxLayout(item)
+        layout.setContentsMargins(50, 0, 50, 0)
         
-        # Text content
-        text_layout = QVBoxLayout()
-        text_layout.setSpacing(5)
+        lbl_text = QLabel(text)
+        lbl_text.setFont(QFont("Segoe UI", 20))
+        lbl_text.setStyleSheet("color: #cdd6f4;")
         
-        lbl_title = QLabel(title)
-        lbl_title.setFont(QFont("Segoe UI", 20, QFont.Bold))
-        lbl_title.setStyleSheet("color: #cdd6f4;")
-        
-        lbl_desc = QLabel(description)
-        lbl_desc.setFont(QFont("Segoe UI", 14))
-        lbl_desc.setStyleSheet("color: #a6adc8;")
-        
-        text_layout.addWidget(lbl_title)
-        text_layout.addWidget(lbl_desc)
-        
-        # Arrow
         lbl_arrow = QLabel("→")
-        lbl_arrow.setFont(QFont("Segoe UI", 32))
+        lbl_arrow.setFont(QFont("Segoe UI", 24))
         lbl_arrow.setStyleSheet(f"color: {accent_color};")
         
-        card_layout.addLayout(text_layout)
-        card_layout.addStretch()
-        card_layout.addWidget(lbl_arrow)
+        layout.addWidget(lbl_text)
+        layout.addStretch()
+        layout.addWidget(lbl_arrow)
         
-        # Make clickable
-        card.mousePressEvent = lambda e: callback()
+        item.mousePressEvent = lambda e: callback()
         
-        return card
+        return item
 
     def init_register_screen(self):
         self.reg_widget = QWidget()
