@@ -3,6 +3,8 @@ import sys
 import cv2
 import os
 import time
+import shutil
+import socket
 import numpy as np
 from datetime import datetime
 
@@ -15,15 +17,16 @@ except ImportError:
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QLineEdit, 
-                             QStackedWidget, QMessageBox, QFrame, QSizePolicy, QGraphicsDropShadowEffect, QListWidget)
-from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve
-from PyQt5.QtGui import QImage, QPixmap, QFont, QColor, QPainter, QPen, QBrush
+                             QStackedWidget, QMessageBox, QFrame, QSizePolicy, 
+                             QGraphicsDropShadowEffect, QListWidget, QListWidgetItem, QGridLayout)
+from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve, QSize
+from PyQt5.QtGui import QImage, QPixmap, QFont, QColor, QPainter, QPen, QBrush, QIcon
 
 # Import modules
 from core.recognizer import FaceRecognizer
 from device.database import LocalDatabase
 from core.face_encoder import FaceEncoder
-from shared.config import DEVICE_ID, KNOWN_FACES_DIR, VERIFICATION_FRAMES
+from shared.config import DEVICE_ID, KNOWN_FACES_DIR, VERIFICATION_FRAMES, SERVER_IP
 
 # --- STYLESHEETS ---
 STYLE_MAIN = """
@@ -65,7 +68,16 @@ QListWidget {
     border-radius: 10px;
     padding: 10px;
     color: #cdd6f4;
-    font-size: 14px;
+    font-size: 16px;
+    border: 1px solid #45475a;
+}
+QListWidget::item {
+    padding: 10px;
+    border-bottom: 1px solid #45475a;
+}
+QListWidget::item:selected {
+    background-color: #45475a;
+    border-radius: 5px;
 }
 """
 
@@ -183,11 +195,21 @@ class VideoThread(QThread):
                 self.process_capture(cv_img)
             
             # Convert to Qt
-            rgb_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB) if not use_picamera2 else cv_img
+            # Fix Color Issue: Ensure input is treated as BGR and converted to RGB
+            # If picamera2 is returning BGR (red/blue swapped), this fixes it.
+            # If it was RGB, we might need to NOT convert. 
+            # User reported "Skin is Blue" -> Input is BGR (since QImage RGB888 interprets B as R).
+            if use_picamera2:
+                 # If config was RGB888 but we see Blue skin, it implies BGR data.
+                 # Let's try explicit conversion.
+                 rgb_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+            else:
+                 # OpenCV standard is BGR
+                 rgb_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+
             h, w, ch = rgb_img.shape
             bytes_per_line = ch * w
             qt_img = QImage(rgb_img.data, w, h, bytes_per_line, QImage.Format_RGB888)
-            # qt_img = qt_img.scaled(800, 600, Qt.KeepAspectRatioByExpanding) # User wants responsiveness
             self.change_pixmap_signal.emit(qt_img)
 
         # Cleanup
@@ -195,34 +217,26 @@ class VideoThread(QThread):
         elif cap: cap.release()
 
     def process_recognition(self, img, last_name, consecutive):
-        # We don't draw boxes here anymore if we want a clean UI, 
-        # OR we draw stylish boxes. Let's draw clean/minimal ones.
         locations, names = self.recognizer.recognize_faces(img)
         
         for (x, y, w, h), name in zip(locations, names):
             color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
-            # Modern Corners only
             l_len = 20
             t = 2
-            # Top-Left
+            # Minimal Corners
             cv2.line(img, (x, y), (x + l_len, y), color, t)
             cv2.line(img, (x, y), (x, y + l_len), color, t)
-            # Top-Right
             cv2.line(img, (x+w, y), (x+w - l_len, y), color, t)
             cv2.line(img, (x+w, y), (x+w, y + l_len), color, t)
-            # Bottom-Left
             cv2.line(img, (x, y+h), (x + l_len, y+h), color, t)
             cv2.line(img, (x, y+h), (x, y+h - l_len), color, t)
-            # Bottom-Right
             cv2.line(img, (x+w, y+h), (x+w - l_len, y+h), color, t)
             cv2.line(img, (x+w, y+h), (x+w, y+h - l_len), color, t)
 
             if name != "Unknown":
-                # Logic for stable recognition
                 self.attendance_signal.emit(f"MATCH:{name}")
     
     def process_capture(self, img):
-         # Just detect face to ensure quality
          if self.recognizer.detector:
              h, w, _ = img.shape
              self.recognizer.detector.setInputSize((w, h))
@@ -233,7 +247,6 @@ class VideoThread(QThread):
                     box = face[:4].astype(int)
                     x, y, w_box, h_box = box[0], box[1], box[2], box[3]
                     
-                    # Draw a guiding circle or box
                     center_x, center_y = x + w_box//2, y + h_box//2
                     radius = int(min(w_box, h_box) / 1.5)
                     cv2.circle(img, (center_x, center_y), radius, (255, 255, 0), 2)
@@ -241,7 +254,6 @@ class VideoThread(QThread):
                     if self.capture_count < self.capture_target:
                         self.capture_count += 1
                         filename = f"{self.capture_dir}/{self.capture_count}.jpg"
-                        # Crop with margin
                         margin = 20
                         x1 = max(0, x - margin)
                         y1 = max(0, y - margin)
@@ -249,12 +261,9 @@ class VideoThread(QThread):
                         y2 = min(h, y + h_box + margin)
                         crop = img[y1:y2, x1:x2]
                         
-                        # Save original BGR if needed, but img might be RGB from picam
-                        # Let's ensure standard BGR for consistency with OpenCV
                         save_img = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR) if PICAMERA2_AVAILABLE else crop
                         cv2.imwrite(filename, save_img)
                         
-                        # Emit Progress
                         progress = int((self.capture_count / self.capture_target) * 100)
                         self.capture_progress_signal.emit(progress)
                     else:
@@ -274,7 +283,6 @@ class VideoThread(QThread):
         self.wait()
     
     def reload_model(self):
-        # Trigger reload (simplified)
         self.recognizer = FaceRecognizer()
 
 class TrainThread(QThread):
@@ -282,8 +290,6 @@ class TrainThread(QThread):
     def run(self):
         try:
             encoder = FaceEncoder()
-            # Fake progress for UX
-            # time.sleep(1) 
             success = encoder.process_images()
             if success:
                 self.finished_signal.emit(True, "Success")
@@ -300,18 +306,24 @@ class MainApp(QMainWindow):
         self.resize(1024, 600)
         self.setStyleSheet(STYLE_MAIN)
         
-        # Database
         self.db = LocalDatabase()
         
-        # Central Stack
         self.central_widget = QStackedWidget()
         self.setCentralWidget(self.central_widget)
         
-        # Screens
-        self.init_home_screen()
-        self.init_register_screen()
+        # Screens Indices:
+        # 0: Home
+        # 1: Settings
+        # 2: Register
+        # 3: Delete
+        # 4: About
         
-        # Threads
+        self.init_home_screen()
+        self.init_settings_screen()
+        self.init_register_screen()
+        self.init_delete_screen()
+        self.init_about_screen()
+        
         self.thread = VideoThread()
         self.thread.change_pixmap_signal.connect(self.update_video_feed)
         self.thread.attendance_signal.connect(self.handle_video_signal)
@@ -321,7 +333,6 @@ class MainApp(QMainWindow):
         self.train_thread = TrainThread()
         self.train_thread.finished_signal.connect(self.on_training_complete)
 
-        # State
         self.last_recognized_time = 0
         
     def init_home_screen(self):
@@ -329,7 +340,7 @@ class MainApp(QMainWindow):
         layout = QHBoxLayout(self.home_widget)
         layout.setContentsMargins(0, 0, 0, 0)
         
-        # Left: Video Feed Area (Full height)
+        # Video
         video_container = QWidget()
         video_container.setStyleSheet("background-color: black;")
         video_layout = QVBoxLayout(video_container)
@@ -340,12 +351,11 @@ class MainApp(QMainWindow):
         self.video_label.setScaledContents(True)
         video_layout.addWidget(self.video_label)
         
-        # Overlay for "Welcome"
         self.overlay = OverlayLabel(self.video_label)
         self.overlay.resize(400, 80)
-        self.overlay.move(120, 20) # Approximate center top
+        self.overlay.move(120, 20) 
         
-        # Right: Sidebar (Info Panel)
+        # Sidebar
         sidebar = QFrame()
         sidebar.setFixedWidth(350)
         sidebar.setStyleSheet("background-color: #1e1e2e; border-left: 1px solid #45475a;")
@@ -365,7 +375,6 @@ class MainApp(QMainWindow):
         self.lbl_date.setStyleSheet("color: #a6adc8;")
         self.lbl_date.setAlignment(Qt.AlignCenter)
         
-        # Update Clock
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_clock)
         self.timer.start(1000)
@@ -373,10 +382,8 @@ class MainApp(QMainWindow):
         
         side_layout.addWidget(self.lbl_time)
         side_layout.addWidget(self.lbl_date)
-        
         side_layout.addStretch()
         
-        # Recent Log
         lbl_recent = QLabel("Recent Activity")
         lbl_recent.setFont(QFont("Segoe UI", 14, QFont.Bold))
         side_layout.addWidget(lbl_recent)
@@ -385,15 +392,82 @@ class MainApp(QMainWindow):
         self.log_list.setFixedHeight(200)
         side_layout.addWidget(self.log_list)
         
-        # Admin Button (Hidden/Small)
-        btn_admin = QPushButton("Register User")
-        btn_admin.clicked.connect(lambda: self.switch_screen(1))
-        side_layout.addWidget(btn_admin)
+        # Settings Button
+        btn_settings = QPushButton(" Settings")
+        # btn_settings.setIcon(QIcon("assets/settings.png")) # Usage if icon available
+        btn_settings.setStyleSheet("""
+            QPushButton {
+                background-color: #313244; 
+                color: #cdd6f4;
+            }
+            QPushButton:hover {
+                background-color: #45475a;
+            }
+        """)
+        btn_settings.clicked.connect(lambda: self.switch_screen(1))
+        side_layout.addWidget(btn_settings)
         
         layout.addWidget(video_container, stretch=1)
         layout.addWidget(sidebar)
         
         self.central_widget.addWidget(self.home_widget)
+
+    def init_settings_screen(self):
+        self.settings_widget = QWidget()
+        layout = QVBoxLayout(self.settings_widget)
+        layout.setContentsMargins(50, 50, 50, 50)
+        layout.setSpacing(30)
+        
+        # Header
+        header = QHBoxLayout()
+        btn_back = QPushButton(" Back")
+        btn_back.setFixedWidth(120)
+        btn_back.setStyleSheet("background-color: #313244; color: #cdd6f4;")
+        btn_back.clicked.connect(lambda: self.switch_screen(0))
+        
+        lbl_title = QLabel("System Settings")
+        lbl_title.setFont(QFont("Segoe UI", 32, QFont.Bold))
+        lbl_title.setStyleSheet("color: #89b4fa;")
+        
+        header.addWidget(btn_back)
+        header.addStretch()
+        header.addWidget(lbl_title)
+        header.addStretch()
+        # Balance spacer
+        dummy = QLabel(); dummy.setFixedWidth(120); header.addWidget(dummy)
+        
+        layout.addLayout(header)
+        layout.addSpacing(50)
+        
+        # Grid Menu
+        grid = QGridLayout()
+        grid.setSpacing(30)
+        
+        btn_add = QPushButton("Add User")
+        btn_add.setFixedSize(250, 150)
+        btn_add.clicked.connect(lambda: self.switch_screen(2))
+        
+        btn_del = QPushButton("Delete User")
+        btn_del.setFixedSize(250, 150)
+        btn_del.setStyleSheet("background-color: #f38ba8; color: #1e1e2e;")
+        btn_del.clicked.connect(self.refresh_delete_list_and_show)
+        
+        btn_about = QPushButton("About System")
+        btn_about.setFixedSize(250, 150)
+        btn_about.setStyleSheet("background-color: #a6e3a1; color: #1e1e2e;")
+        btn_about.clicked.connect(self.show_about_screen)
+        
+        grid.addWidget(btn_add, 0, 0)
+        grid.addWidget(btn_del, 0, 1)
+        grid.addWidget(btn_about, 0, 2)
+        
+        # Center the grid
+        grid_container = QWidget()
+        grid_container.setLayout(grid)
+        layout.addWidget(grid_container, alignment=Qt.AlignCenter)
+        layout.addStretch()
+        
+        self.central_widget.addWidget(self.settings_widget)
 
     def init_register_screen(self):
         self.reg_widget = QWidget()
@@ -418,11 +492,10 @@ class MainApp(QMainWindow):
         self.btn_start = QPushButton("Start Scanning")
         self.btn_start.clicked.connect(self.start_registration)
         
-        self.btn_cancel = QPushButton("Cancel")
-        self.btn_cancel.setStyleSheet("background-color: #fab387; color: #1e1e2e;")
-        self.btn_cancel.clicked.connect(self.cancel_registration)
+        self.btn_cancel_reg = QPushButton("Cancel")
+        self.btn_cancel_reg.setStyleSheet("background-color: #fab387; color: #1e1e2e;")
+        self.btn_cancel_reg.clicked.connect(lambda: self.switch_screen(1)) # Back to Settings
         
-        # Status / Progress
         self.progress_ring = CircularProgress()
         self.progress_ring.hide()
         
@@ -438,11 +511,11 @@ class MainApp(QMainWindow):
         form_layout.addWidget(self.lbl_status)
         form_layout.addStretch()
         form_layout.addWidget(self.btn_start)
-        form_layout.addWidget(self.btn_cancel)
+        form_layout.addWidget(self.btn_cancel_reg)
         
         # Right: Camera Preview
         self.video_label_reg = QLabel()
-        self.video_label_reg.setFixedSize(480, 640) # Portrait preview? Or square
+        self.video_label_reg.setFixedSize(480, 640) 
         self.video_label_reg.setStyleSheet("background-color: black; border-radius: 20px;")
         self.video_label_reg.setScaledContents(True)
 
@@ -450,6 +523,92 @@ class MainApp(QMainWindow):
         layout.addWidget(self.video_label_reg)
         
         self.central_widget.addWidget(self.reg_widget)
+
+    def init_delete_screen(self):
+        self.del_widget = QWidget()
+        layout = QVBoxLayout(self.del_widget)
+        layout.setContentsMargins(50, 50, 50, 50)
+        
+        # Header
+        header = QHBoxLayout()
+        btn_back = QPushButton(" Back")
+        btn_back.setFixedWidth(120)
+        btn_back.clicked.connect(lambda: self.switch_screen(1))
+        
+        lbl_title = QLabel("Delete User")
+        lbl_title.setFont(QFont("Segoe UI", 32, QFont.Bold))
+        lbl_title.setStyleSheet("color: #f38ba8;")
+        
+        header.addWidget(btn_back)
+        header.addStretch()
+        header.addWidget(lbl_title)
+        header.addStretch()
+        dummy = QLabel(); dummy.setFixedWidth(120); header.addWidget(dummy)
+        
+        layout.addLayout(header)
+        layout.addSpacing(30)
+        
+        # List
+        self.delete_list = QListWidget()
+        self.delete_list.setFont(QFont("Segoe UI", 16))
+        layout.addWidget(self.delete_list)
+        
+        btn_confirm_del = QPushButton("Delete Selected User")
+        btn_confirm_del.setStyleSheet("background-color: #f38ba8; color: #1e1e2e;")
+        btn_confirm_del.clicked.connect(self.delete_selected_user)
+        layout.addWidget(btn_confirm_del)
+        
+        self.central_widget.addWidget(self.del_widget)
+
+    def init_about_screen(self):
+        self.about_widget = QWidget()
+        layout = QVBoxLayout(self.about_widget)
+        layout.setContentsMargins(50, 50, 50, 50)
+        
+        # Header
+        header = QHBoxLayout()
+        btn_back = QPushButton(" Back")
+        btn_back.setFixedWidth(120)
+        btn_back.clicked.connect(lambda: self.switch_screen(1))
+        
+        lbl_title = QLabel("About System")
+        lbl_title.setFont(QFont("Segoe UI", 32, QFont.Bold))
+        
+        header.addWidget(btn_back)
+        header.addStretch()
+        header.addWidget(lbl_title)
+        header.addStretch()
+        dummy = QLabel(); dummy.setFixedWidth(120); header.addWidget(dummy)
+        
+        layout.addLayout(header)
+        layout.addSpacing(50)
+        
+        # Info Box
+        info_box = QFrame()
+        info_box.setStyleSheet("background-color: #313244; border-radius: 20px;")
+        info_layout = QVBoxLayout(info_box)
+        info_layout.setContentsMargins(40, 40, 40, 40)
+        info_layout.setSpacing(20)
+        
+        self.lbl_ip = QLabel("IP Address: Loading...")
+        self.lbl_ip.setFont(QFont("Segoe UI", 24))
+        
+        lbl_dev = QLabel(f"Device ID: {DEVICE_ID}")
+        lbl_dev.setFont(QFont("Segoe UI", 24))
+        
+        lbl_ver = QLabel("Version: 2.0.0 (Kiosk Edition)")
+        lbl_ver.setFont(QFont("Segoe UI", 18))
+        lbl_ver.setStyleSheet("color: #a6adc8;")
+        
+        info_layout.addWidget(self.lbl_ip)
+        info_layout.addWidget(lbl_dev)
+        info_layout.addWidget(lbl_ver)
+        info_layout.addStretch()
+        
+        layout.addWidget(info_box)
+        layout.addStretch()
+        
+        self.central_widget.addWidget(self.about_widget)
 
     def update_clock(self):
         now = datetime.now()
@@ -460,19 +619,66 @@ class MainApp(QMainWindow):
         self.central_widget.setCurrentIndex(index)
         if index == 0:
             self.thread.mode = "RECOGNITION"
-        elif index == 1:
-            self.thread.mode = "IDLE" # Wait for start button
+        elif index == 2: # Register
+            self.thread.mode = "IDLE" 
+        else:
+            # Settings, Delete, About -> IDLE
+            self.thread.mode = "IDLE"
+
+    def refresh_delete_list_and_show(self):
+        self.delete_list.clear()
+        if os.path.exists(KNOWN_FACES_DIR):
+            users = [d for d in os.listdir(KNOWN_FACES_DIR) if os.path.isdir(os.path.join(KNOWN_FACES_DIR, d))]
+            for user in users:
+                self.delete_list.addItem(QListWidgetItem(user))
+        self.switch_screen(3)
+
+    def delete_selected_user(self):
+        item = self.delete_list.currentItem()
+        if not item:
+            QMessageBox.warning(self, "Selection", "Please select a user to delete.")
+            return
+        
+        user_dir = item.text()
+        confirm = QMessageBox.question(self, "Confirm Delete", 
+                                     f"Are you sure you want to delete '{user_dir}'?",
+                                     QMessageBox.Yes | QMessageBox.No)
+        
+        if confirm == QMessageBox.Yes:
+            full_path = os.path.join(KNOWN_FACES_DIR, user_dir)
+            try:
+                shutil.rmtree(full_path)
+                QMessageBox.information(self, "Success", f"User '{user_dir}' deleted.")
+                self.refresh_delete_list_and_show()
+                # Trigger model reload
+                self.train_thread.start()
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to delete: {e}")
+
+    def show_about_screen(self):
+        # Get IP
+        ip = "Unknown"
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+        except:
+            ip = "127.0.0.1"
+        
+        self.lbl_ip.setText(f"IP Address: {ip}")
+        self.switch_screen(4)
 
     def start_registration(self):
         name = self.input_name.text()
         uid = self.input_id.text()
         if not name or not uid:
-            self.lbl_status.setText("Please enter Name and ID")
+            self.lbl_status.setText("Enter Name and ID")
             self.lbl_status.setStyleSheet("color: #f38ba8;")
             return
         
         self.btn_start.hide()
-        self.btn_cancel.hide()
+        self.btn_cancel_reg.hide()
         self.progress_ring.set_value(0)
         self.progress_ring.show()
         self.lbl_status.setText("Look at the camera...")
@@ -480,35 +686,33 @@ class MainApp(QMainWindow):
         
         self.thread.start_capture(uid, name)
 
-    def cancel_registration(self):
-        self.thread.mode = "IDLE" # Stop capturing if running
-        self.switch_screen(0)
-        self.input_name.clear()
-        self.input_id.clear()
-
     def update_video_feed(self, img):
-        # Scale image to fit the label
         current_idx = self.central_widget.currentIndex()
-        target_label = self.video_label if current_idx == 0 else self.video_label_reg
+        # Only show video in Home(0) and Register(2)
+        if current_idx == 0:
+            target = self.video_label
+        elif current_idx == 2:
+            target = self.video_label_reg
+        else:
+            return
         
         pixmap = QPixmap.fromImage(img)
-        # Scaled contents handles resizing, but let's ensure aspect ratio if needed
-        # For Kiosk, filling the area is often better
-        target_label.setPixmap(pixmap)
+        target.setPixmap(pixmap)
 
     def handle_video_signal(self, msg):
-        if msg.startswith("MATCH:"):
-            name = msg.split(":")[1]
-            # Debounce
-            now = time.time()
-            if now - self.last_recognized_time > 3.0: # 3 second cooldown
-                self.last_recognized_time = now
-                self.show_welcome(name)
-                self.log_attendance(name)
-        elif msg == "CAPTURE_COMPLETE":
-            self.lbl_status.setText("Processing Profile...")
-            # Start Training
-            self.train_thread.start()
+        current_idx = self.central_widget.currentIndex()
+        if current_idx == 0: # Home
+            if msg.startswith("MATCH:"):
+                name = msg.split(":")[1]
+                now = time.time()
+                if now - self.last_recognized_time > 3.0: 
+                    self.last_recognized_time = now
+                    self.show_welcome(name)
+                    self.log_attendance(name)
+        elif current_idx == 2: # Register
+             if msg == "CAPTURE_COMPLETE":
+                self.lbl_status.setText("Processing Profile...")
+                self.train_thread.start()
 
     def update_capture_progress(self, val):
         self.progress_ring.set_value(val)
@@ -523,21 +727,26 @@ class MainApp(QMainWindow):
         self.db.add_record(DEVICE_ID, name)
 
     def on_training_complete(self, success, msg):
-        if success:
-            self.lbl_status.setText("Registration Complete!")
-            self.thread.reload_model()
-            QTimer.singleShot(2000, self.reset_registration)
+        if self.central_widget.currentIndex() == 2: # Register Mode
+            if success:
+                self.lbl_status.setText("Registration Complete!")
+                self.thread.reload_model()
+                QTimer.singleShot(2000, self.reset_registration)
+            else:
+                self.lbl_status.setText("Error: " + msg)
+                self.btn_start.show()
+                self.btn_cancel_reg.show()
         else:
-            self.lbl_status.setText("Error: " + msg)
-            self.btn_start.show()
-            self.btn_cancel.show()
+             # Likely background update from delete
+             if success:
+                 self.thread.reload_model()
 
     def reset_registration(self):
-        self.switch_screen(0)
+        self.switch_screen(1) # Back to Settings
         self.input_name.clear()
         self.input_id.clear()
         self.btn_start.show()
-        self.btn_cancel.show()
+        self.btn_cancel_reg.show()
         self.progress_ring.hide()
         self.lbl_status.setText("Ready")
 
@@ -552,9 +761,6 @@ if __name__ == "__main__":
     
     app = QApplication(sys.argv)
     window = MainApp()
-    
-    # Kiosk Mode Check (Optional: window.showFullScreen())
     # window.showFullScreen() 
     window.show()
-    
     sys.exit(app.exec_())
