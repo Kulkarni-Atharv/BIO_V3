@@ -15,7 +15,7 @@ except ImportError:
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QLineEdit, 
-                             QStackedWidget, QMessageBox, QFrame, QSizePolicy, QGraphicsDropShadowEffect)
+                             QStackedWidget, QMessageBox, QFrame, QSizePolicy, QGraphicsDropShadowEffect, QListWidget)
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve
 from PyQt5.QtGui import QImage, QPixmap, QFont, QColor, QPainter, QPen, QBrush
 
