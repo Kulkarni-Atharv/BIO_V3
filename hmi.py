@@ -4,6 +4,7 @@ import cv2
 import os
 import time
 import numpy as np
+from datetime import datetime
 
 # Try to import picamera2 for Raspberry Pi CSI cameras
 try:
@@ -11,13 +12,12 @@ try:
     PICAMERA2_AVAILABLE = True
 except ImportError:
     PICAMERA2_AVAILABLE = False
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
- 
-                             QHBoxLayout, QLabel, QPushButton, QLineEdit, 
-                             QStackedWidget, QMessageBox, QListWidget)
-from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QImage, QPixmap, QFont
 
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                             QHBoxLayout, QLabel, QPushButton, QLineEdit, 
+                             QStackedWidget, QMessageBox, QFrame, QSizePolicy, QGraphicsDropShadowEffect)
+from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve
+from PyQt5.QtGui import QImage, QPixmap, QFont, QColor, QPainter, QPen, QBrush
 
 # Import modules
 from core.recognizer import FaceRecognizer
@@ -25,421 +25,536 @@ from device.database import LocalDatabase
 from core.face_encoder import FaceEncoder
 from shared.config import DEVICE_ID, KNOWN_FACES_DIR, VERIFICATION_FRAMES
 
+# --- STYLESHEETS ---
+STYLE_MAIN = """
+QMainWindow {
+    background-color: #1e1e2e;
+}
+QLabel {
+    color: #cdd6f4;
+    font-family: 'Segoe UI', sans-serif;
+}
+QLineEdit {
+    background-color: #313244;
+    color: #cdd6f4;
+    border: 2px solid #45475a;
+    border-radius: 10px;
+    padding: 10px;
+    font-size: 16px;
+}
+QLineEdit:focus {
+    border: 2px solid #89b4fa;
+}
+QPushButton {
+    background-color: #89b4fa;
+    color: #1e1e2e;
+    border: none;
+    border-radius: 15px;
+    padding: 15px;
+    font-size: 18px;
+    font-weight: bold;
+}
+QPushButton:hover {
+    background-color: #b4befe;
+}
+QPushButton:pressed {
+    background-color: #74c7ec;
+}
+QListWidget {
+    background-color: #313244;
+    border-radius: 10px;
+    padding: 10px;
+    color: #cdd6f4;
+    font-size: 14px;
+}
+"""
 
-# --- Worker Thread for Video & Recognition ---
+# --- CUSTOM WIDGETS ---
+class OverlayLabel(QLabel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAlignment(Qt.AlignCenter)
+        self.setStyleSheet("""
+            background-color: rgba(0, 0, 0, 150);
+            color: #a6e3a1;
+            font-size: 24px;
+            font-weight: bold;
+            border-radius: 20px;
+        """)
+        self.hide()
+
+    def show_message(self, text, duration=2000):
+        self.setText(text)
+        self.show()
+        QTimer.singleShot(duration, self.hide)
+
+class CircularProgress(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.value = 0
+        self.setFixedSize(200, 200)
+
+    def set_value(self, val):
+        self.value = val
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        rect = self.rect()
+        painter.translate(rect.center())
+        
+        # Background Circle
+        pen = QPen(QColor("#45475a"), 10)
+        painter.setPen(pen)
+        painter.drawEllipse(-80, -80, 160, 160)
+        
+        # Progress Arc
+        if self.value > 0:
+            pen.setColor(QColor("#89b4fa"))
+            painter.setPen(pen)
+            span = int(-self.value * 3.6 * 16) # 360 degrees
+            painter.drawArc(-80, -80, 160, 160, 90 * 16, span)
+
+        # Text
+        painter.setPen(QColor("#cdd6f4"))
+        painter.setFont(QFont("Segoe UI", 24, QFont.Bold))
+        text = f"{int(self.value)}%"
+        fm = painter.fontMetrics()
+        w = fm.width(text)
+        h = fm.height()
+        painter.drawText(-w//2, h//4, text)
+
+# --- WORKER THREADS ---
 class VideoThread(QThread):
     change_pixmap_signal = pyqtSignal(QImage)
-    attendance_signal = pyqtSignal(str) # Emits name when recognized
-
+    attendance_signal = pyqtSignal(str) # Emits name (for recognition) or status (for capture)
+    capture_progress_signal = pyqtSignal(int)
+    
     def __init__(self):
         super().__init__()
         self._run_flag = True
-        self.mode = "RECOGNITION" # or "CAPTURE"
+        self.mode = "RECOGNITION" # "RECOGNITION", "CAPTURE", "IDLE"
         self.capture_count = 0
         self.capture_target = 30
         self.capture_dir = ""
-        self.capture_id = ""
-        
-        # Initialize Logic in RUN to avoid thread affinity issues
         self.recognizer = None
 
     def run(self):
-        # Initialize Recognizer here (Worker Thread)
         if self.recognizer is None:
             self.recognizer = FaceRecognizer()
 
-        # Try multiple camera backends
+        # Camera Setup
         cap = None
         picam2 = None
         use_picamera2 = False
         
-        # Option 1: Try picamera2 for Raspberry Pi CSI camera
         if PICAMERA2_AVAILABLE:
             try:
                 picam2 = Picamera2()
                 config = picam2.create_preview_configuration(main={"size": (640, 480), "format": "RGB888"})
                 picam2.configure(config)
                 picam2.start()
-                # Set controls to ensure color
-                picam2.set_controls({"AeEnable": True, "AwbEnable": True, "Saturation": 1.0, "AwbMode": 1}) # 1=Auto
+                picam2.set_controls({"AeEnable": True, "AwbEnable": True})
                 use_picamera2 = True
-                print("Using picamera2 for CSI camera (Color Mode Enabled)")
-            except Exception as e:
-                print(f"picamera2 failed: {e}")
+            except:
                 use_picamera2 = False
         
-        # Option 2: Try V4L2 backend (USB cameras on Linux)
         if not use_picamera2:
-            cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
-        
-        # Option 3: Try default backend
-        if not use_picamera2 and (not cap or not cap.isOpened()):
-            cap = cv2.VideoCapture(0)
-        
-        if not use_picamera2 and (not cap or not cap.isOpened()):
-            print("ERROR: Could not open any camera")
-            return
-        
-        last_attendance_time = {}
-        last_recognized_name = None
-        consecutive_frames = 0
-        COOLDOWN = 10 # seconds
+            cap = cv2.VideoCapture(0) # Default
+            if not cap.isOpened():
+                return 
 
-        try:
-            while self._run_flag:
-                # Get frame from appropriate source
-                if use_picamera2:
-                    cv_img = picam2.capture_array()
-                    # picamera2 typically returns BGR or we should rely on Qt conversion later
-                    # If previously swapped, let's remove the forced swap.
-                    # cv_img = cv2.cvtColor(cv_img, cv2.COLOR_RGB2BGR)
-                    ret = True
-                else:
-                    ret, cv_img = cap.read()
-                
-                if ret:
-                    # Logic based on mode
-                    if self.mode == "RECOGNITION":
-                        if self.recognizer:
-                            locations, names = self.recognizer.recognize_faces(cv_img)
-                            # Draw and Emit
-                            # Recognizer now returns (x, y, w, h)
-                            for (x, y, w, h), name in zip(locations, names):
-                                left, top, right, bottom = x, y, x+w, y+h
-                                
-                                if name != "Unknown":
-                                    # Multi-frame verification
-                                    if name == last_recognized_name:
-                                        consecutive_frames += 1
-                                    else:
-                                        last_recognized_name = name
-                                        consecutive_frames = 1
-                                    
-                                    # Visual feedback (Yellow for verifying, Green for verified)
-                                    color = (0, 255, 255) # Yellow
-                                    if consecutive_frames >= VERIFICATION_FRAMES:
-                                        color = (0, 255, 0) # Green
-                                        
-                                        now = time.time()
-                                        if name not in last_attendance_time or (now - last_attendance_time.get(name, 0) > COOLDOWN):
-                                            self.attendance_signal.emit(name)
-                                            last_attendance_time[name] = now
-                                    else:
-                                        pass # Just waiting for more frames
+        last_name = None
+        consecutive = 0
+        
+        while self._run_flag:
+            if use_picamera2:
+                cv_img = picam2.capture_array()
+            else:
+                ret, cv_img = cap.read()
+                if not ret: continue
+            
+            # Processing
+            if self.mode == "RECOGNITION":
+                self.process_recognition(cv_img, last_name, consecutive)
+            elif self.mode == "CAPTURE":
+                self.process_capture(cv_img)
+            
+            # Convert to Qt
+            rgb_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB) if not use_picamera2 else cv_img
+            h, w, ch = rgb_img.shape
+            bytes_per_line = ch * w
+            qt_img = QImage(rgb_img.data, w, h, bytes_per_line, QImage.Format_RGB888)
+            # qt_img = qt_img.scaled(800, 600, Qt.KeepAspectRatioByExpanding) # User wants responsiveness
+            self.change_pixmap_signal.emit(qt_img)
 
-                                    cv2.rectangle(cv_img, (left, top), (right, bottom), color, 2)
-                                    status_text = f"{name}"
-                                    if consecutive_frames < VERIFICATION_FRAMES:
-                                        status_text += f" ({consecutive_frames}/{VERIFICATION_FRAMES})"
-                                    cv2.putText(cv_img, status_text, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
-                                else:
-                                     # Unknown face
-                                     cv2.rectangle(cv_img, (left, top), (right, bottom), (0, 0, 255), 2)
-                                     cv2.putText(cv_img, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
-                        
-                        # Reset counter if no faces found
-                        if not names and last_recognized_name is not None:
-                             last_recognized_name = None
-                             consecutive_frames = 0
+        # Cleanup
+        if use_picamera2: picam2.stop()
+        elif cap: cap.release()
+
+    def process_recognition(self, img, last_name, consecutive):
+        # We don't draw boxes here anymore if we want a clean UI, 
+        # OR we draw stylish boxes. Let's draw clean/minimal ones.
+        locations, names = self.recognizer.recognize_faces(img)
+        
+        for (x, y, w, h), name in zip(locations, names):
+            color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
+            # Modern Corners only
+            l_len = 20
+            t = 2
+            # Top-Left
+            cv2.line(img, (x, y), (x + l_len, y), color, t)
+            cv2.line(img, (x, y), (x, y + l_len), color, t)
+            # Top-Right
+            cv2.line(img, (x+w, y), (x+w - l_len, y), color, t)
+            cv2.line(img, (x+w, y), (x+w, y + l_len), color, t)
+            # Bottom-Left
+            cv2.line(img, (x, y+h), (x + l_len, y+h), color, t)
+            cv2.line(img, (x, y+h), (x, y+h - l_len), color, t)
+            # Bottom-Right
+            cv2.line(img, (x+w, y+h), (x+w - l_len, y+h), color, t)
+            cv2.line(img, (x+w, y+h), (x+w, y+h - l_len), color, t)
+
+            if name != "Unknown":
+                # Logic for stable recognition
+                self.attendance_signal.emit(f"MATCH:{name}")
+    
+    def process_capture(self, img):
+         # Just detect face to ensure quality
+         if self.recognizer.detector:
+             h, w, _ = img.shape
+             self.recognizer.detector.setInputSize((w, h))
+             _, faces = self.recognizer.detector.detect(img)
+             
+             if faces is not None:
+                 for face in faces:
+                    box = face[:4].astype(int)
+                    x, y, w_box, h_box = box[0], box[1], box[2], box[3]
                     
-                    elif self.mode == "CAPTURE":
-                        # Just detect to show user face is found
-                        if self.recognizer and self.recognizer.detector:
-                            h, w, _ = cv_img.shape
-                            self.recognizer.detector.setInputSize((w, h))
-                            _, faces = self.recognizer.detector.detect(cv_img)
-                            
-                            if faces is not None:
-                                for face in faces:
-                                    box = face[:4].astype(int)
-                                    x, y, w_box, h_box = box[0], box[1], box[2], box[3]
-                                    cv2.rectangle(cv_img, (x, y), (x+w_box, y+h_box), (255, 0, 0), 2)
-                                    
-                                    # Capture logic
-                                    if self.capture_count < self.capture_target:
-                                        self.capture_count += 1
-                                        # Save
-                                        filename = f"{self.capture_dir}/User.{self.capture_id}.{self.capture_count}.jpg"
-                                        # Ensure bounds
-                                        x = max(0, x); y = max(0, y)
-                                        if w_box > 0 and h_box > 0:
-                                            crop = cv_img[y:y+h_box, x:x+w_box]
-                                            cv2.imwrite(filename, crop)
-                                        
-                        cv2.putText(cv_img, f"Captured: {self.capture_count}/{self.capture_target}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                    # Draw a guiding circle or box
+                    center_x, center_y = x + w_box//2, y + h_box//2
+                    radius = int(min(w_box, h_box) / 1.5)
+                    cv2.circle(img, (center_x, center_y), radius, (255, 255, 0), 2)
+                    
+                    if self.capture_count < self.capture_target:
+                        self.capture_count += 1
+                        filename = f"{self.capture_dir}/{self.capture_count}.jpg"
+                        # Crop with margin
+                        margin = 20
+                        x1 = max(0, x - margin)
+                        y1 = max(0, y - margin)
+                        x2 = min(w, x + w_box + margin)
+                        y2 = min(h, y + h_box + margin)
+                        crop = img[y1:y2, x1:x2]
                         
-                        if self.capture_count >= self.capture_target:
-                            self.mode = "IDLE" # Stop capturing
-                            self.attendance_signal.emit("CAPTURE_COMPLETE")
-
-                    # Convert to Qt Image
-                    rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
-                    h, w, ch = rgb_image.shape
-                    bytes_per_line = ch * w
-                    convert_to_Qt_format = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
-                    p = convert_to_Qt_format.scaled(640, 480, Qt.KeepAspectRatio)
-                    self.change_pixmap_signal.emit(p)
-        finally:
-            if use_picamera2 and picam2:
-                picam2.stop()
-            elif cap:
-                cap.release()
+                        # Save original BGR if needed, but img might be RGB from picam
+                        # Let's ensure standard BGR for consistency with OpenCV
+                        save_img = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR) if PICAMERA2_AVAILABLE else crop
+                        cv2.imwrite(filename, save_img)
+                        
+                        # Emit Progress
+                        progress = int((self.capture_count / self.capture_target) * 100)
+                        self.capture_progress_signal.emit(progress)
+                    else:
+                        self.mode = "IDLE"
+                        self.attendance_signal.emit("CAPTURE_COMPLETE")
+                        break
 
     def start_capture(self, user_id, user_name):
-        self.capture_id = user_id
         self.capture_dir = os.path.join(KNOWN_FACES_DIR, f"{user_id}_{user_name}")
         if not os.path.exists(self.capture_dir):
             os.makedirs(self.capture_dir)
-        
         self.capture_count = 0
         self.mode = "CAPTURE"
 
     def stop(self):
         self._run_flag = False
         self.wait()
-
+    
     def reload_model(self):
-        # We need to signal the thread to reload, safely.
-        # Simplest way: set flag, let run loop handle it or just re-init next frame?
-        # Actually simplest is to just re-instantiate in the run loop if a flag is set.
-        # But for now, we can just replace the object (atomic assignment in Python is generally safe for this usage)
-        if self.isRunning():
-            self.recognizer = FaceRecognizer()
-        else:
-            self.recognizer = FaceRecognizer()
-
-# ... (MainApp class remains mostly same, just skipped for brevity unless changes needed) ...
-# Actually we need to patch the __main__ block
-
+        # Trigger reload (simplified)
+        self.recognizer = FaceRecognizer()
 
 class TrainThread(QThread):
     finished_signal = pyqtSignal(bool, str)
-
     def run(self):
         try:
             encoder = FaceEncoder()
+            # Fake progress for UX
+            # time.sleep(1) 
             success = encoder.process_images()
             if success:
-                self.finished_signal.emit(True, "Training Complete")
+                self.finished_signal.emit(True, "Success")
             else:
-                self.finished_signal.emit(False, "No embeddings generated")
+                self.finished_signal.emit(False, "Failed")
         except Exception as e:
             self.finished_signal.emit(False, str(e))
 
-
+# --- MAIN APP ---
 class MainApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Smart Attendance System (HMI)")
-        self.setGeometry(100, 100, 1000, 600)
+        self.setWindowTitle("Bio-Access | Smart Attendance")
+        self.resize(1024, 600)
+        self.setStyleSheet(STYLE_MAIN)
         
         # Database
         self.db = LocalDatabase()
-
-        # Stacked Widget for Screens
-        self.stacked_widget = QStackedWidget()
-        self.setCentralWidget(self.stacked_widget)
-
-        # 1. Home Screen
-        self.home_widget = QWidget()
-        self.init_home_ui()
-        self.stacked_widget.addWidget(self.home_widget)
-
-        # 2. Add User Screen
-        self.add_user_widget = QWidget()
-        self.init_add_user_ui()
-        self.stacked_widget.addWidget(self.add_user_widget)
-
-        # Workers
+        
+        # Central Stack
+        self.central_widget = QStackedWidget()
+        self.setCentralWidget(self.central_widget)
+        
+        # Screens
+        self.init_home_screen()
+        self.init_register_screen()
+        
+        # Threads
         self.thread = VideoThread()
-        self.thread.change_pixmap_signal.connect(self.update_image)
-        self.thread.attendance_signal.connect(self.handle_attendance_signal)
+        self.thread.change_pixmap_signal.connect(self.update_video_feed)
+        self.thread.attendance_signal.connect(self.handle_video_signal)
+        self.thread.capture_progress_signal.connect(self.update_capture_progress)
         self.thread.start()
         
         self.train_thread = TrainThread()
-        self.train_thread.finished_signal.connect(self.handle_training_finished)
+        self.train_thread.finished_signal.connect(self.on_training_complete)
 
-    def init_home_ui(self):
-        layout = QHBoxLayout()
-        # Left: Video
-        self.video_label = QLabel("Loading Camera...")
-        self.video_label.setFixedSize(640, 480)
-        self.video_label.setStyleSheet("background-color: black;")
-        layout.addWidget(self.video_label)
-        # Right: Sidebar
-        sidebar = QVBoxLayout()
-        title = QLabel("Attendance Log")
-        title.setFont(QFont("Arial", 16, QFont.Bold))
-        sidebar.addWidget(title)
-        self.log_list = QListWidget()
-        sidebar.addWidget(self.log_list)
-
-        btn_add = QPushButton("Add New User")
-        btn_add.setFixedHeight(50)
-        btn_add.clicked.connect(lambda: self.switch_screen(1))
-        sidebar.addWidget(btn_add)
-
-        btn_delete = QPushButton("Delete User")
-        btn_delete.setFixedHeight(50)
-        btn_delete.setStyleSheet("background-color: #ffcccc;")
-        btn_delete.clicked.connect(self.delete_user_action)
-        sidebar.addWidget(btn_delete)
-
-        layout.addLayout(sidebar)
-        self.home_widget.setLayout(layout)
-
-    def delete_user_action(self):
-        # List users from known_faces directory
-        known_faces_dir = KNOWN_FACES_DIR
-        if not os.path.exists(known_faces_dir):
-            QMessageBox.warning(self, "Error", "No known_faces directory found.")
-            return
-
-        users = [d for d in os.listdir(known_faces_dir) if os.path.isdir(os.path.join(known_faces_dir, d))]
-        if not users:
-            QMessageBox.information(self, "Info", "No users found to delete.")
-            return
-
-        # Show Selection Dialog
-        from PyQt5.QtWidgets import QInputDialog
-        user, ok = QInputDialog.getItem(self, "Delete User", "Select user to delete:", users, 0, False)
+        # State
+        self.last_recognized_time = 0
         
-        if ok and user:
-            confirm = QMessageBox.question(self, "Confirm Delete", 
-                                         f"Are you sure you want to delete '{user}'?\nThis cannot be undone.",
-                                         QMessageBox.Yes | QMessageBox.No)
-            
-            if confirm == QMessageBox.Yes:
-                import shutil
-                try:
-                    shutil.rmtree(os.path.join(known_faces_dir, user))
-                    QMessageBox.information(self, "Success", f"User '{user}' deleted.")
-                    
-                    # Retrain Model
-                    self.lbl_status_home = QLabel("Updating Model...") # Quick feedback hack, better to use status bar or just wait
-                    # Actually we don't have a status bar on home, let's just use the modal approach or run background
-                    # Since we have TrainThread, let's use it.
-                    self.train_thread.start()
-                    QMessageBox.information(self, "Updating", "Model is updating in background...")
-                    
-                except Exception as e:
-                    QMessageBox.critical(self, "Error", f"Failed to delete user: {e}")
+    def init_home_screen(self):
+        self.home_widget = QWidget()
+        layout = QHBoxLayout(self.home_widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Left: Video Feed Area (Full height)
+        video_container = QWidget()
+        video_container.setStyleSheet("background-color: black;")
+        video_layout = QVBoxLayout(video_container)
+        video_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.video_label = QLabel("Initializing Camera...")
+        self.video_label.setAlignment(Qt.AlignCenter)
+        self.video_label.setScaledContents(True)
+        video_layout.addWidget(self.video_label)
+        
+        # Overlay for "Welcome"
+        self.overlay = OverlayLabel(self.video_label)
+        self.overlay.resize(400, 80)
+        self.overlay.move(120, 20) # Approximate center top
+        
+        # Right: Sidebar (Info Panel)
+        sidebar = QFrame()
+        sidebar.setFixedWidth(350)
+        sidebar.setStyleSheet("background-color: #1e1e2e; border-left: 1px solid #45475a;")
+        
+        side_layout = QVBoxLayout(sidebar)
+        side_layout.setSpacing(20)
+        side_layout.setContentsMargins(30, 50, 30, 30)
+        
+        # Clock
+        self.lbl_time = QLabel()
+        self.lbl_time.setFont(QFont("Segoe UI", 48, QFont.Bold))
+        self.lbl_time.setStyleSheet("color: #89b4fa;")
+        self.lbl_time.setAlignment(Qt.AlignCenter)
+        
+        self.lbl_date = QLabel()
+        self.lbl_date.setFont(QFont("Segoe UI", 18))
+        self.lbl_date.setStyleSheet("color: #a6adc8;")
+        self.lbl_date.setAlignment(Qt.AlignCenter)
+        
+        # Update Clock
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_clock)
+        self.timer.start(1000)
+        self.update_clock()
+        
+        side_layout.addWidget(self.lbl_time)
+        side_layout.addWidget(self.lbl_date)
+        
+        side_layout.addStretch()
+        
+        # Recent Log
+        lbl_recent = QLabel("Recent Activity")
+        lbl_recent.setFont(QFont("Segoe UI", 14, QFont.Bold))
+        side_layout.addWidget(lbl_recent)
+        
+        self.log_list = QListWidget()
+        self.log_list.setFixedHeight(200)
+        side_layout.addWidget(self.log_list)
+        
+        # Admin Button (Hidden/Small)
+        btn_admin = QPushButton("Register User")
+        btn_admin.clicked.connect(lambda: self.switch_screen(1))
+        side_layout.addWidget(btn_admin)
+        
+        layout.addWidget(video_container, stretch=1)
+        layout.addWidget(sidebar)
+        
+        self.central_widget.addWidget(self.home_widget)
 
-    def init_add_user_ui(self):
-        layout = QVBoxLayout()
-        header = QLabel("Register New User")
-        header.setFont(QFont("Arial", 20, QFont.Bold))
-        header.setAlignment(Qt.AlignCenter)
-        layout.addWidget(header)
-        form_layout = QHBoxLayout()
+    def init_register_screen(self):
+        self.reg_widget = QWidget()
+        layout = QHBoxLayout(self.reg_widget)
+        
+        # Left: Form
+        form_container = QWidget()
+        form_layout = QVBoxLayout(form_container)
+        form_layout.setContentsMargins(50, 50, 50, 50)
+        form_layout.setSpacing(20)
+        
+        lbl_title = QLabel("New User Registration")
+        lbl_title.setFont(QFont("Segoe UI", 24, QFont.Bold))
+        lbl_title.setStyleSheet("color: #89b4fa;")
+        
         self.input_name = QLineEdit()
-        self.input_name.setPlaceholderText("Enter Name (e.g., John)")
+        self.input_name.setPlaceholderText("Full Name")
+        
         self.input_id = QLineEdit()
-        self.input_id.setPlaceholderText("Enter ID (numeric)")
+        self.input_id.setPlaceholderText("Employee ID")
+        
+        self.btn_start = QPushButton("Start Scanning")
+        self.btn_start.clicked.connect(self.start_registration)
+        
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel.setStyleSheet("background-color: #fab387; color: #1e1e2e;")
+        self.btn_cancel.clicked.connect(self.cancel_registration)
+        
+        # Status / Progress
+        self.progress_ring = CircularProgress()
+        self.progress_ring.hide()
+        
+        self.lbl_status = QLabel("Ready to Scan")
+        self.lbl_status.setAlignment(Qt.AlignCenter)
+        
+        form_layout.addWidget(lbl_title)
+        form_layout.addSpacing(20)
         form_layout.addWidget(self.input_name)
         form_layout.addWidget(self.input_id)
-        layout.addLayout(form_layout)
-        self.video_label_reg = QLabel("Camera Preview")
-        self.video_label_reg.setFixedSize(640, 480)
-        self.video_label_reg.setStyleSheet("background-color: black;")
-        self.video_label_reg.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.video_label_reg, alignment=Qt.AlignCenter)
-        btn_layout = QHBoxLayout()
+        form_layout.addSpacing(20)
+        form_layout.addWidget(self.progress_ring, alignment=Qt.AlignCenter)
+        form_layout.addWidget(self.lbl_status)
+        form_layout.addStretch()
+        form_layout.addWidget(self.btn_start)
+        form_layout.addWidget(self.btn_cancel)
         
-        self.btn_capture = QPushButton("Start Capture (30 Images)")
-        self.btn_capture.clicked.connect(self.start_capture)
-        
-        # Training is now automatic, but we can keep a hidden or disabled button just in case, 
-        # or remove it. User asked for automatic. Let's show specific status button instead.
-        self.lbl_status = QLabel("Ready")
-        self.lbl_status.setAlignment(Qt.AlignCenter)
+        # Right: Camera Preview
+        self.video_label_reg = QLabel()
+        self.video_label_reg.setFixedSize(480, 640) # Portrait preview? Or square
+        self.video_label_reg.setStyleSheet("background-color: black; border-radius: 20px;")
+        self.video_label_reg.setScaledContents(True)
 
-        btn_back = QPushButton("Back to Home")
-        btn_back.clicked.connect(lambda: self.switch_screen(0))
+        layout.addWidget(form_container, stretch=1)
+        layout.addWidget(self.video_label_reg)
         
-        btn_layout.addWidget(self.btn_capture)
-        btn_layout.addWidget(self.lbl_status)
-        btn_layout.addWidget(btn_back)
-        layout.addLayout(btn_layout)
-        self.add_user_widget.setLayout(layout)
+        self.central_widget.addWidget(self.reg_widget)
+
+    def update_clock(self):
+        now = datetime.now()
+        self.lbl_time.setText(now.strftime("%H:%M"))
+        self.lbl_date.setText(now.strftime("%A, %d %B %Y"))
 
     def switch_screen(self, index):
-        self.stacked_widget.setCurrentIndex(index)
+        self.central_widget.setCurrentIndex(index)
         if index == 0:
             self.thread.mode = "RECOGNITION"
         elif index == 1:
-            pass
+            self.thread.mode = "IDLE" # Wait for start button
 
-    def update_image(self, qt_img):
-        if self.stacked_widget.currentIndex() == 0:
-            self.video_label.setPixmap(QPixmap.fromImage(qt_img))
-        else:
-            self.video_label_reg.setPixmap(QPixmap.fromImage(qt_img))
-
-    def handle_attendance_signal(self, payload):
-        if payload == "CAPTURE_COMPLETE":
-            self.btn_capture.setText("Capture Done! Processing...")
-            self.btn_capture.setEnabled(False)
-            self.lbl_status.setText("Training Model... Please Wait.")
-            
-            # Start Training Automatically
-            self.train_thread.start()
-            return
-            
-        name = payload
-        self.db.add_record(DEVICE_ID, name)
-        time_str = time.strftime("%H:%M:%S")
-        self.log_list.insertItem(0, f"[{time_str}] {name}")
-
-    def start_capture(self):
-        name = self.input_name.text().strip()
-        uid = self.input_id.text().strip()
+    def start_registration(self):
+        name = self.input_name.text()
+        uid = self.input_id.text()
         if not name or not uid:
-            QMessageBox.warning(self, "Input Error", "Please enter ID and Name.")
+            self.lbl_status.setText("Please enter Name and ID")
+            self.lbl_status.setStyleSheet("color: #f38ba8;")
             return
+        
+        self.btn_start.hide()
+        self.btn_cancel.hide()
+        self.progress_ring.set_value(0)
+        self.progress_ring.show()
+        self.lbl_status.setText("Look at the camera...")
+        self.lbl_status.setStyleSheet("color: #cdd6f4;")
+        
         self.thread.start_capture(uid, name)
-        self.btn_capture.setText("Capturing... Look at Camera")
-        self.btn_capture.setEnabled(False)
-        self.lbl_status.setText("Capturing...")
 
-    def handle_training_finished(self, success, message):
+    def cancel_registration(self):
+        self.thread.mode = "IDLE" # Stop capturing if running
+        self.switch_screen(0)
+        self.input_name.clear()
+        self.input_id.clear()
+
+    def update_video_feed(self, img):
+        # Scale image to fit the label
+        current_idx = self.central_widget.currentIndex()
+        target_label = self.video_label if current_idx == 0 else self.video_label_reg
+        
+        pixmap = QPixmap.fromImage(img)
+        # Scaled contents handles resizing, but let's ensure aspect ratio if needed
+        # For Kiosk, filling the area is often better
+        target_label.setPixmap(pixmap)
+
+    def handle_video_signal(self, msg):
+        if msg.startswith("MATCH:"):
+            name = msg.split(":")[1]
+            # Debounce
+            now = time.time()
+            if now - self.last_recognized_time > 3.0: # 3 second cooldown
+                self.last_recognized_time = now
+                self.show_welcome(name)
+                self.log_attendance(name)
+        elif msg == "CAPTURE_COMPLETE":
+            self.lbl_status.setText("Processing Profile...")
+            # Start Training
+            self.train_thread.start()
+
+    def update_capture_progress(self, val):
+        self.progress_ring.set_value(val)
+        self.lbl_status.setText(f"Scanning... {val}%")
+
+    def show_welcome(self, name):
+        self.overlay.show_message(f"Welcome, {name}!")
+
+    def log_attendance(self, name):
+        time_str = datetime.now().strftime("%H:%M:%S")
+        self.log_list.insertItem(0, f"✅ {name} @ {time_str}")
+        self.db.add_record(DEVICE_ID, name)
+
+    def on_training_complete(self, success, msg):
         if success:
-            # Check if this was triggered by delete or add
-            # Ideally distinguish, but generic message is fine
-            if self.stacked_widget.currentIndex() == 0:
-               # Home screen (Delete action likely)
-               QMessageBox.information(self, "Success", "Model Updated Successfully.")
-               self.thread.reload_model()
-            else:
-               # Add screen
-               QMessageBox.information(self, "Success", f"User Registered!\n{message}")
-               self.thread.reload_model()
-               
-               # Reset UI
-               self.btn_capture.setText("Start Capture (30 Images)")
-               self.btn_capture.setEnabled(True)
-               self.lbl_status.setText("Ready (Model Updated)")
-               self.input_name.clear()
-               self.input_id.clear()
+            self.lbl_status.setText("Registration Complete!")
+            self.thread.reload_model()
+            QTimer.singleShot(2000, self.reset_registration)
         else:
-            QMessageBox.warning(self, "Error", f"Training Failed: {message}")
-            if self.stacked_widget.currentIndex() == 1:
-                self.lbl_status.setText("Error")
-                self.btn_capture.setEnabled(True)
-                self.btn_capture.setText("Retry Capture")
+            self.lbl_status.setText("Error: " + msg)
+            self.btn_start.show()
+            self.btn_cancel.show()
+
+    def reset_registration(self):
+        self.switch_screen(0)
+        self.input_name.clear()
+        self.input_id.clear()
+        self.btn_start.show()
+        self.btn_cancel.show()
+        self.progress_ring.hide()
+        self.lbl_status.setText("Ready")
 
     def closeEvent(self, event):
         self.thread.stop()
         event.accept()
 
 if __name__ == "__main__":
-    # Fix for OpenCV vs PyQt5 conflict
-    # Force usage of PyQt5 plugins inside the venv
-    import PyQt5
-    plugin_path = os.path.join(os.path.dirname(PyQt5.__file__), "Qt5", "plugins")
-    os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = plugin_path
+    # Environment Fix for Raspberry Pi
+    os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = "/usr/lib/aarch64-linux-gnu/qt5/plugins"
+    os.environ["XDG_SESSION_TYPE"] = "xcb"
     
     app = QApplication(sys.argv)
     window = MainApp()
+    
+    # Kiosk Mode Check (Optional: window.showFullScreen())
+    # window.showFullScreen() 
     window.show()
+    
     sys.exit(app.exec_())
