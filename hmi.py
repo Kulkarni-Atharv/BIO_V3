@@ -917,12 +917,29 @@ class MainApp(QMainWindow):
         event.accept()
 
 if __name__ == "__main__":
-    # Environment Fix for Raspberry Pi
-    os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = "/usr/lib/aarch64-linux-gnu/qt5/plugins"
-    os.environ["XDG_SESSION_TYPE"] = "xcb"
+    # Raspberry Pi Optimization
+    if os.uname().machine.startswith('arm'):
+        os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = "/usr/lib/aarch64-linux-gnu/qt5/plugins"
+        os.environ["XDG_SESSION_TYPE"] = "xcb"
     
+    # Global Exception Hook to catch crashes
+    def exception_hook(exctype, value, traceback):
+        print(f"CRITICAL ERROR: {exctype}, {value}")
+        sys.__excepthook__(exctype, value, traceback)
+        sys.exit(1)
+        
+    sys.excepthook = exception_hook
+
     app = QApplication(sys.argv)
-    window = MainApp()
-    # window.showFullScreen() 
-    window.show()
-    sys.exit(app.exec_())
+    
+    # Font
+    font = QFont("Segoe UI", 10)
+    app.setFont(font)
+    
+    try:
+        window = MainApp()
+        # window.showFullScreen() 
+        window.show()
+        sys.exit(app.exec_())
+    except Exception as e:
+        print(f"Application Crashed: {e}")
