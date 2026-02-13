@@ -1,5 +1,4 @@
-# Smart Attendance System (BIO)
-
+# Smart Attendance System (BIO_V2)
 A Python-based Face Recognition Attendance System using **MobileFaceNet** for efficient inference on CPU/Edge devices.
 
 ## Features
