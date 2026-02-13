@@ -204,9 +204,9 @@ class VideoThread(QThread):
                 ret, cv_img = cap.read()
                 if not ret: continue
             
-            # Processing - OPTIMIZATION: Process recognition every 3rd frame (approx 8-10 FPS)
-            # This drastically reduces CPU load without affecting user experience.
-            if current_mode == "RECOGNITION" and frame_count % 3 == 0:
+            # Processing - OPTIMIZATION: Process recognition every 5th frame (~8 FPS AI)
+            # This keeps AI load low while allowing smoother video (40 FPS target)
+            if current_mode == "RECOGNITION" and frame_count % 5 == 0:
                 self.process_recognition(cv_img, last_name, consecutive)
             elif current_mode == "CAPTURE":
                 # Capture mode needs higher FPS for smooth UI feedback
@@ -225,8 +225,8 @@ class VideoThread(QThread):
             qt_img = QImage(rgb_img.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
             self.change_pixmap_signal.emit(qt_img)
             
-            # Important: Prevent CPU starvation (40ms = 25 FPS target)
-            self.msleep(40)
+            # Important: Prevent CPU starvation (25ms = 40 FPS target)
+            self.msleep(25)
 
         # Cleanup
         if use_picamera2: picam2.stop()
