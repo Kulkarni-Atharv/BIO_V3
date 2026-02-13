@@ -245,6 +245,7 @@ class VideoThread(QThread):
     def process_capture(self, img):
         if self.recognizer is None or self.recognizer.detector is None:
             return
+            
         try:
             h, w, _ = img.shape
             self.recognizer.detector.setInputSize((w, h))
@@ -252,35 +253,47 @@ class VideoThread(QThread):
             
             if faces is not None:
                 for face in faces:
-                    box = face[:4].astype(int)
-                    x, y, w_box, h_box = box[0], box[1], box[2], box[3]
-                    
-                    center_x, center_y = x + w_box//2, y + h_box//2
-                    radius = int(min(w_box, h_box) / 1.5)
-                    cv2.circle(img, (center_x, center_y), radius, (255, 255, 0), 2)
-                    
-                    if self.capture_count < self.capture_target:
-                        self.capture_count += 1
-                        filename = f"{self.capture_dir}/{self.capture_count}.jpg"
-                        margin = 20
-                        x1 = max(0, x - margin)
-                        y1 = max(0, y - margin)
-                        x2 = min(w, x + w_box + margin)
-                        y2 = min(h, y + h_box + margin)
-                        crop = img[y1:y2, x1:x2]
-                        
-                        save_img = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR) if PICAMERA2_AVAILABLE else crop
-                        cv2.imwrite(filename, save_img)
-                        
-                        progress = int((self.capture_count / self.capture_target) * 100)
-                        self.capture_progress_signal.emit(progress)
-                    else:
-                        self.mode = "IDLE"
-                        self.attendance_signal.emit("CAPTURE_COMPLETE")
-                        break
+                   box = face[:4].astype(int)
+                   x, y, w_box, h_box = box[0], box[1], box[2], box[3]
+                   
+                   center_x, center_y = x + w_box//2, y + h_box//2
+                   radius = int(min(w_box, h_box) / 1.5)
+                   # Draw guide
+                   cv2.circle(img, (center_x, center_y), radius, (255, 255, 0), 2)
+                   
+                   if self.capture_count < self.capture_target:
+                       self.capture_count += 1
+                       
+                       # Ensure directory exists before writing
+                       if not self.capture_dir or not os.path.exists(self.capture_dir):
+                           # Fallback or error - but don't crash
+                           print(f"Error: Capture directory missing: {self.capture_dir}")
+                           self.mode = "IDLE" 
+                           return
+
+                       filename = f"{self.capture_dir}/{self.capture_count}.jpg"
+                       margin = 20
+                       x1 = max(0, x - margin)
+                       y1 = max(0, y - margin)
+                       x2 = min(w, x + w_box + margin)
+                       y2 = min(h, y + h_box + margin)
+                       crop = img[y1:y2, x1:x2]
+                       
+                       # Validate crop
+                       if crop.size == 0: continue
+
+                       save_img = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR) if PICAMERA2_AVAILABLE else crop
+                       cv2.imwrite(filename, save_img)
+                       
+                       progress = int((self.capture_count / self.capture_target) * 100)
+                       self.capture_progress_signal.emit(progress)
+                   else:
+                       self.mode = "IDLE"
+                       self.attendance_signal.emit("CAPTURE_COMPLETE")
+                       break
         except Exception as e:
-            print(f"Capture error: {e}")
-            return
+            print(f"Capture Error: {e}")
+            self.mode = "IDLE" # Reset to safe state
 
     def start_capture(self, user_id, user_name):
         self.capture_dir = os.path.join(KNOWN_FACES_DIR, f"{user_id}_{user_name}")
