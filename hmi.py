@@ -148,10 +148,22 @@ class VideoThread(QThread):
         super().__init__()
         self._run_flag = True
         self.mode = "RECOGNITION" # "RECOGNITION", "CAPTURE", "IDLE"
+        self.mutex = QMutex()
         self.capture_count = 0
         self.capture_target = 30
         self.capture_dir = ""
         self.recognizer = None
+
+    def set_mode(self, mode):
+        self.mutex.lock()
+        self.mode = mode
+        self.mutex.unlock()
+
+    def get_mode(self):
+        self.mutex.lock()
+        m = self.mode
+        self.mutex.unlock()
+        return m
 
     def run(self):
         if self.recognizer is None:
@@ -182,6 +194,8 @@ class VideoThread(QThread):
         consecutive = 0
         
         while self._run_flag:
+            current_mode = self.get_mode()
+
             if use_picamera2:
                 cv_img = picam2.capture_array()
             else:
@@ -189,28 +203,25 @@ class VideoThread(QThread):
                 if not ret: continue
             
             # Processing
-            if self.mode == "RECOGNITION":
+            if current_mode == "RECOGNITION":
                 self.process_recognition(cv_img, last_name, consecutive)
-            elif self.mode == "CAPTURE":
+            elif current_mode == "CAPTURE":
                 self.process_capture(cv_img)
             
             # Convert to Qt
             # Fix Color Issue: Ensure input is treated as BGR and converted to RGB
-            # If picamera2 is returning BGR (red/blue swapped), this fixes it.
-            # If it was RGB, we might need to NOT convert. 
-            # User reported "Skin is Blue" -> Input is BGR (since QImage RGB888 interprets B as R).
             if use_picamera2:
-                 # If config was RGB888 but we see Blue skin, it implies BGR data.
-                 # Let's try explicit conversion.
                  rgb_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
             else:
-                 # OpenCV standard is BGR
                  rgb_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
 
             h, w, ch = rgb_img.shape
             bytes_per_line = ch * w
             qt_img = QImage(rgb_img.data, w, h, bytes_per_line, QImage.Format_RGB888)
             self.change_pixmap_signal.emit(qt_img)
+            
+            # Important: Prevent CPU starvation
+            self.msleep(10)
 
         # Cleanup
         if use_picamera2: picam2.stop()
