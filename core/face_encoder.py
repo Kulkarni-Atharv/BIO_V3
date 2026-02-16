@@ -169,11 +169,9 @@ class FaceEncoder:
 
     def _process_single_image(self, img_path):
         folder_name = os.path.basename(os.path.dirname(img_path))
-        if "_" in folder_name:
-            parts = folder_name.split('_')
-            user_name = parts[1] # ID is parts[0]
-        else:
-            user_name = folder_name
+        # Use simple folder name as identity (e.g. "101_Atharv")
+        # Logic to split ID and Name will be handled in HMI or Database
+        user_name = folder_name
 
         img = cv2.imread(img_path)
         if img is None: return None, None

@@ -1185,12 +1185,28 @@ class MainApp(QMainWindow):
         current_idx = self.central_widget.currentIndex()
         if current_idx == 0: # Home
             if msg.startswith("MATCH:"):
-                name = msg.split(":")[1]
+                # msg format: "MATCH:ID_Name" or "MATCH:Name"
+                # If FaceEncoder uses folder name, it could be "101_Atharv"
+                full_identity = msg.split("MATCH:")[1]
+                
+                user_id = full_identity
+                name = full_identity
+                
+                # Check if formatted as ID_Name
+                # Simple check: digits followed by underscore
+                # Or just split by first underscore
+                if "_" in full_identity:
+                    parts = full_identity.split('_', 1) 
+                    # Attempt to see if first part is ID-like? 
+                    # Actually, let's just assume strict "ID_Name" format for simplicity if underscore exists
+                    user_id = parts[0]
+                    name = parts[1]
+
                 now = time.time()
                 if now - self.last_recognized_time > 3.0: 
                     self.last_recognized_time = now
                     self.show_welcome(name)
-                    self.log_attendance(name)
+                    self.log_attendance(user_id, name)
         elif current_idx == 2: # Register
              if msg == "CAPTURE_COMPLETE":
                 self.lbl_status.setText("Processing Profile...")
@@ -1203,10 +1219,11 @@ class MainApp(QMainWindow):
     def show_welcome(self, name):
         self.overlay.show_message(f"Welcome, {name}!")
 
-    def log_attendance(self, name):
-        time_str = datetime.now().strftime("%H:%M:%S")
-        # log_list removed in new UI
-        self.db.add_record(DEVICE_ID, name)
+    def log_attendance(self, user_id, name):
+        # time_str removed as it's handled in DB
+        # Call updated add_record with user_id
+        # Confidence is not passed from Recognizer yet, default to 0.0 or update recognizer later
+        self.db.add_record(DEVICE_ID, name, user_id=user_id)
 
     def on_training_complete(self, success, msg):
         if self.central_widget.currentIndex() == 2: # Register Mode
