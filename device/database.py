@@ -86,6 +86,37 @@ class LocalDatabase:
             """)
 
             conn.commit()
+            conn.commit()
+            
+            # --- SCHEMA MIGRATION ---
+            # Check if 'attendance_log' has 'user_id' column
+            cursor.execute("DESCRIBE attendance_log")
+            columns = [row[0] for row in cursor.fetchall()]
+            
+            if 'user_id' not in columns:
+                logger.info("Migrating schema: Adding missing columns to 'attendance_log'...")
+                try:
+                    # Add new columns individually or in bulk
+                    # We use IGNORE or check, but since we know user_id is missing, we add the batch
+                    cursor.execute("""
+                        ALTER TABLE attendance_log
+                        ADD COLUMN user_id VARCHAR(100) AFTER id,
+                        ADD COLUMN punch_date DATE AFTER punch_time,
+                        ADD COLUMN punch_clock TIME AFTER punch_date,
+                        ADD COLUMN punch_type ENUM('IN','OUT') AFTER punch_clock,
+                        ADD COLUMN shift_id INT AFTER punch_type,
+                        ADD COLUMN attendance_status VARCHAR(50) DEFAULT 'Present' AFTER shift_id,
+                        ADD COLUMN late_minutes INT DEFAULT 0 AFTER attendance_status,
+                        ADD COLUMN early_departure_minutes INT DEFAULT 0 AFTER late_minutes,
+                        ADD COLUMN overtime_minutes INT DEFAULT 0 AFTER early_departure_minutes,
+                        ADD COLUMN confidence FLOAT AFTER overtime_minutes,
+                        ADD CONSTRAINT fk_shift FOREIGN KEY (shift_id) REFERENCES shifts(id)
+                    """)
+                    conn.commit()
+                    logger.info("Schema migration completed successfully.")
+                except mysql.connector.Error as err:
+                     logger.error(f"Schema Migration Error: {err}")
+
             logger.info("Database schema initialized successfully.")
 
         except mysql.connector.Error as err:
