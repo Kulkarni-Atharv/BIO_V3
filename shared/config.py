@@ -32,10 +32,12 @@ EMBEDDINGS_FILE = os.path.join(DATA_DIR, "embeddings.npy")
 NAMES_FILE = os.path.join(DATA_DIR, "names.json")
 
 # MQTT Configuration
-# Using EMQX Public Broker for testing
-MQTT_BROKER = "broker.emqx.io" 
-MQTT_PORT = 1883
-MQTT_TOPIC = "attendance/updates"
+# EMQX Cloud Broker
+MQTT_BROKER = "m318c100.ala.us-east-1.emqxsl.com"
+MQTT_PORT = 8883 # SSL Port
+MQTT_USERNAME = "autonex"
+MQTT_PASSWORD = "Autonex@2025"
+MQTT_TOPIC_PREFIX = "attendance" # Topic: attendance/{device_id}/updates
 
 # Camera Configuration
 CAMERA_INDEX = 0 
