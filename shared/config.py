@@ -37,7 +37,7 @@ MQTT_BROKER = "m318c100.ala.us-east-1.emqxsl.com"
 MQTT_PORT = 8883 # SSL Port
 MQTT_USERNAME = "autonex"
 MQTT_PASSWORD = "Autonex@2025"
-MQTT_TOPIC_PREFIX = "attendance" # Topic: attendance/{device_id}/updates
+MQTT_TOPIC_PREFIX = "p/attendance" # Topic: p/attendance/{device_id}/updates
 
 # Camera Configuration
 CAMERA_INDEX = 0 

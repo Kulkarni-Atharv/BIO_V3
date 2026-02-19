@@ -109,7 +109,21 @@ class MQTTSyncService:
         for record in records:
             try:
                 # 2. Serialize
-                payload = json.dumps(record, default=self.json_serializer)
+                # Filter payload based on user requirements
+                filtered_record = {
+                    "id": record.get("id"),
+                    "user_id": record.get("user_id"),
+                    "punch_time": record.get("punch_time"),
+                    "punch_type": record.get("punch_type"),
+                    "attendance_status": record.get("attendance_status"),
+                    "late_minutes": record.get("late_minutes"),
+                    "early_departure_minutes": record.get("early_departure_minutes"),
+                    "overtime_minutes": record.get("overtime_minutes"),
+                    "confidence": record.get("confidence"),
+                    "shift_id": record.get("shift_id")
+                }
+                
+                payload = json.dumps(filtered_record, default=self.json_serializer)
                 
                 # 3. Publish
                 info = self.client.publish(self.topic, payload, qos=1)
