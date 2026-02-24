@@ -91,33 +91,24 @@ class MQTTSyncService:
         self.connected = False
 
     def _on_message(self, client, userdata, msg):
-        """Handle incoming employee list from dashboard on p/a/1/receive-users."""
+        """Handle incoming messages."""
         try:
-            raw     = msg.payload.decode("utf-8")
-            topic   = msg.topic
+            raw   = msg.payload.decode("utf-8")
+            topic = msg.topic
 
-            logger.info("─" * 50)
-            logger.info("MESSAGE RECEIVED")
-            logger.info("  Topic   : %s", topic)
-            logger.info("  Payload : %s", raw)
-            logger.info("─" * 50)
+            print(f"\n[{topic}]\n{raw}\n")
 
             payload = json.loads(raw)
 
             if topic == self.sub_recv_users:
                 if isinstance(payload, list):
-                    logger.info("  Type    : list  (%d employees)", len(payload))
-                    for i, emp in enumerate(payload, 1):
-                        logger.info("    [%d] user_id=%-10s  name=%s",
-                                    i, emp.get("user_id","?"), emp.get("name","?"))
                     self.db.upsert_users(payload)
-                    logger.info("  Saved %d employees to local DB.", len(payload))
+                    logger.info("Saved %d employees to local DB.", len(payload))
                 elif isinstance(payload, dict):
-                    logger.info("  Type    : single employee -> %s", payload)
                     self.db.upsert_users([payload])
-                    logger.info("  Saved 1 employee to local DB.")
+                    logger.info("Saved 1 employee to local DB.")
                 else:
-                    logger.warning("  Unexpected payload type: %s", type(payload))
+                    logger.warning("Unexpected payload type: %s", type(payload))
             else:
                 logger.debug("Unhandled topic: %s", topic)
 
