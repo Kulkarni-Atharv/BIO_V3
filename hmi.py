@@ -5,8 +5,12 @@ import os
 import time
 import shutil
 import socket
+import json
+import ssl
 import numpy as np
 from datetime import datetime
+
+import paho.mqtt.client as mqtt_client
 
 # Try to import picamera2 for Raspberry Pi CSI cameras
 try:
@@ -27,7 +31,11 @@ from PyQt5.QtGui import QImage, QPixmap, QFont, QColor, QPainter, QPen, QBrush, 
 from core.recognizer import FaceRecognizer
 from device.database import LocalDatabase
 from core.face_encoder import FaceEncoder
-from shared.config import DEVICE_ID, KNOWN_FACES_DIR, VERIFICATION_FRAMES
+from shared.config import (
+    DEVICE_ID, KNOWN_FACES_DIR, VERIFICATION_FRAMES,
+    MQTT_BROKER, MQTT_PORT, MQTT_USERNAME, MQTT_PASSWORD,
+    MQTT_TOPIC_RECEIVE_USERS, MQTT_TOPIC_REQUEST_USERS
+)
 
 # --- STYLESHEETS ---
 STYLE_MAIN = """
@@ -345,6 +353,76 @@ class TrainThread(QThread):
         except Exception as e:
             self.finished_signal.emit(False, str(e))
 
+
+class MQTTWorker(QThread):
+    """Background thread that subscribes to receive-users and auto-updates the HMI employee list."""
+    users_updated = pyqtSignal()   # Emitted after SQLite is updated — triggers UI refresh
+
+    def __init__(self):
+        super().__init__()
+        self.db = LocalDatabase()
+        self._stop_flag = False
+
+    def run(self):
+        client = mqtt_client.Client(client_id="hmi_user_listener", clean_session=True)
+        client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
+
+        # TLS (same as mqtt_sync.py)
+        if MQTT_PORT == 8883:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            client.tls_set_context(ctx)
+
+        def on_connect(c, userdata, flags, rc):
+            if rc == 0:
+                c.subscribe(MQTT_TOPIC_RECEIVE_USERS, qos=1)
+                # Immediately request the employee list on connect
+                c.publish(MQTT_TOPIC_REQUEST_USERS,
+                          json.dumps({"device_id": DEVICE_ID, "action": "get-users"}),
+                          qos=1)
+            else:
+                print(f"[MQTTWorker] Connect failed rc={rc}")
+
+        def on_message(c, userdata, msg):
+            try:
+                payload = json.loads(msg.payload.decode("utf-8"))
+                # Accept both a list and a single dict
+                if isinstance(payload, dict):
+                    payload = [payload]
+                if not isinstance(payload, list):
+                    return
+                # Extract only what the CM4 needs
+                stripped = [
+                    {"user_id": str(u.get("user_id") or u.get("id", "")),
+                     "name":    str(u.get("name")    or u.get("employee_name", ""))}
+                    for u in payload
+                    if (u.get("user_id") or u.get("id")) and (u.get("name") or u.get("employee_name"))
+                ]
+                if stripped:
+                    self.db.upsert_users(stripped)
+                    self.users_updated.emit()   # Tell HMI to refresh
+            except Exception as e:
+                print(f"[MQTTWorker] Parse error: {e}")
+
+        client.on_connect = on_connect
+        client.on_message = on_message
+
+        try:
+            client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
+            client.loop_start()
+            # Keep thread alive until stop() is called
+            while not self._stop_flag:
+                self.msleep(500)
+        except Exception as e:
+            print(f"[MQTTWorker] Connection error: {e}")
+        finally:
+            client.loop_stop()
+            client.disconnect()
+
+    def stop(self):
+        self._stop_flag = True
+
 # --- MAIN APP ---
 class MainApp(QMainWindow):
     def __init__(self):
@@ -383,9 +461,14 @@ class MainApp(QMainWindow):
         self.thread.attendance_signal.connect(self.handle_video_signal)
         self.thread.capture_progress_signal.connect(self.update_capture_progress)
         self.thread.start()
-        
+
         self.train_thread = TrainThread()
         self.train_thread.finished_signal.connect(self.on_training_complete)
+
+        # MQTT worker — listens on receive-users and auto-refreshes employee list
+        self.mqtt_worker = MQTTWorker()
+        self.mqtt_worker.users_updated.connect(self.refresh_employee_list)
+        self.mqtt_worker.start()
 
         self.last_recognized_time = 0
         
@@ -1401,6 +1484,8 @@ class MainApp(QMainWindow):
 
     def closeEvent(self, event):
         self.thread.stop()
+        self.mqtt_worker.stop()
+        self.mqtt_worker.wait()
         event.accept()
 
 
