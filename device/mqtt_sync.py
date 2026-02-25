@@ -101,12 +101,15 @@ class MQTTSyncService:
             payload = json.loads(raw)
 
             if topic == self.sub_recv_users:
+                # Dashboard may send: [...] (raw array) or {"users": [...]} (wrapped)
+                if isinstance(payload, dict) and "users" in payload:
+                    payload = payload["users"]   # unwrap
+                elif isinstance(payload, dict):
+                    payload = [payload]           # single user dict
+
                 if isinstance(payload, list):
                     self.db.upsert_users(payload)
                     logger.info("Saved %d employees to local DB.", len(payload))
-                elif isinstance(payload, dict):
-                    self.db.upsert_users([payload])
-                    logger.info("Saved 1 employee to local DB.")
                 else:
                     logger.warning("Unexpected payload type: %s", type(payload))
             else:

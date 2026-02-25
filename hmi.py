@@ -387,9 +387,11 @@ class MQTTWorker(QThread):
         def on_message(c, userdata, msg):
             try:
                 payload = json.loads(msg.payload.decode("utf-8"))
-                # Accept both a list and a single dict
-                if isinstance(payload, dict):
-                    payload = [payload]
+                # Dashboard may send: [...] or {"users": [...]}
+                if isinstance(payload, dict) and "users" in payload:
+                    payload = payload["users"]   # unwrap
+                elif isinstance(payload, dict):
+                    payload = [payload]           # single user dict
                 if not isinstance(payload, list):
                     return
                 # Extract only what the CM4 needs
