@@ -6,6 +6,7 @@ import sys
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from shared.config import KNOWN_FACES_DIR, YUNET_PATH, DETECTION_THRESHOLD
+from device.camera import open_usb_camera
 
 def capture_faces():
     print("--- Face Description ---")
@@ -17,18 +18,10 @@ def capture_faces():
     if not os.path.exists(dir_name):
         os.makedirs(dir_name)
     
-    # Try GStreamer pipeline for Libcamera on Raspberry Pi
-    gst_pipeline = (
-        "libcamerasrc ! video/x-raw, width=640, height=480, framerate=30/1 ! "
-        "videoconvert ! videoscale ! video/x-raw, format=BGR ! appsink"
-    )
-    cam = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
+    cam = open_usb_camera()
     if not cam.isOpened():
-        print("[WARN] GStreamer pipeline failed, falling back to index 0...")
-        cam = cv2.VideoCapture(0)
-        cam.set(3, 640) # set video width
-        cam.set(4, 480) # set video height
-    
+        return
+
     try:
         # Load YuNet Face Detector
         if not os.path.exists(YUNET_PATH):

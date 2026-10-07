@@ -1,21 +1,33 @@
 
 import cv2
+import platform
 import threading
 import time
 
+from shared.config import CAMERA_INDEX
+
+
+def open_usb_camera(index=CAMERA_INDEX, width=640, height=480):
+    """Open a USB (UVC) camera. Uses V4L2 on Linux/Raspberry Pi, OpenCV default elsewhere."""
+    if platform.system() == "Linux":
+        cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
+        # MJPG lets most USB webcams deliver 640x480 @ 30fps over USB 2.0
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+    else:
+        cap = cv2.VideoCapture(index)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # keep latency low
+    if not cap.isOpened():
+        print(f"[Camera] Could not open USB camera at index {index}. "
+              f"Run test_camera.py to find the right index and set CAMERA_INDEX in shared/config.py.")
+    return cap
+
+
 class Camera:
-    def __init__(self, source=0):
+    def __init__(self, source=CAMERA_INDEX):
         self.source = source
-        # Try GStreamer pipeline for Libcamera on Raspberry Pi
-        gst_pipeline = (
-            "libcamerasrc ! video/x-raw, width=640, height=480, framerate=30/1 ! "
-            "videoconvert ! videoscale ! video/x-raw, format=BGR ! appsink"
-        )
-        # Attempt to open using GStreamer first
-        self.cap = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
-        if not self.cap.isOpened():
-             print("[Camera] GStreamer pipeline failed, falling back to index 0...")
-             self.cap = cv2.VideoCapture(self.source)
+        self.cap = open_usb_camera(self.source)
         self.ret = False
         self.frame = None
         self.running = False
@@ -25,10 +37,10 @@ class Camera:
     def start(self):
         if self.running:
             return
-        
+
         if not self.cap.isOpened():
-            self.cap.open(self.source)
-            
+            self.cap = open_usb_camera(self.source)
+
         self.running = True
         self.thread = threading.Thread(target=self._update, daemon=True)
         self.thread.start()

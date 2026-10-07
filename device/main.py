@@ -21,7 +21,7 @@ def main():
     db = LocalDatabase()
     uploader = DataUploader(db)
     recognizer = FaceRecognizer(known_faces_dir=KNOWN_FACES_DIR)
-    camera = Camera(source=0) # Using default webcam
+    camera = Camera() # USB camera at CAMERA_INDEX
 
     # Start independent threads
     uploader.start()

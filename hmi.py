@@ -12,13 +12,6 @@ from datetime import datetime
 
 import paho.mqtt.client as mqtt_client
 
-# Try to import picamera2 for Raspberry Pi CSI cameras
-try:
-    from picamera2 import Picamera2
-    PICAMERA2_AVAILABLE = True
-except ImportError:
-    PICAMERA2_AVAILABLE = False
-
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QLineEdit, 
                              QStackedWidget, QMessageBox, QFrame, QSizePolicy, 
@@ -31,6 +24,7 @@ from PyQt5.QtGui import QImage, QPixmap, QFont, QColor, QPainter, QPen, QBrush, 
 from core.recognizer import FaceRecognizer
 from device.database import LocalDatabase
 from core.face_encoder import FaceEncoder
+from device.camera import open_usb_camera
 from shared.config import (
     DEVICE_ID, KNOWN_FACES_DIR, VERIFICATION_FRAMES,
     MQTT_BROKER, MQTT_PORT, MQTT_USERNAME, MQTT_PASSWORD,
@@ -179,41 +173,24 @@ class VideoThread(QThread):
         if self.recognizer is None:
             self.recognizer = FaceRecognizer()
 
-        # Camera Setup
-        cap = None
-        picam2 = None
-        use_picamera2 = False
-        
-        if PICAMERA2_AVAILABLE:
-            try:
-                picam2 = Picamera2()
-                config = picam2.create_preview_configuration(main={"size": (640, 480), "format": "RGB888"})
-                picam2.configure(config)
-                picam2.start()
-                picam2.set_controls({"AeEnable": True, "AwbEnable": True})
-                use_picamera2 = True
-            except:
-                use_picamera2 = False
-        
-        if not use_picamera2:
-            cap = cv2.VideoCapture(0) # Default
-            if not cap.isOpened():
-                return 
+        # Camera Setup (USB camera)
+        cap = open_usb_camera()
+        if not cap.isOpened():
+            return
 
         last_name = None
         consecutive = 0
         frame_count = 0
-        
+
         while self._run_flag:
             current_mode = self.get_mode()
             frame_count += 1
 
-            if use_picamera2:
-                cv_img = picam2.capture_array()
-            else:
-                ret, cv_img = cap.read()
-                if not ret: continue
-            
+            ret, cv_img = cap.read()
+            if not ret:
+                self.msleep(40)
+                continue
+
             # Processing - OPTIMIZATION: Process recognition every 3rd frame (approx 8-10 FPS)
             # This drastically reduces CPU load without affecting user experience.
             if current_mode == "RECOGNITION" and frame_count % 3 == 0:
@@ -224,10 +201,7 @@ class VideoThread(QThread):
             
             # Convert to Qt
             # Fix Color Issue: Ensure input is treated as BGR and converted to RGB
-            if use_picamera2:
-                 rgb_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
-            else:
-                 rgb_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+            rgb_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
 
             h, w, ch = rgb_img.shape
             bytes_per_line = ch * w
@@ -239,8 +213,7 @@ class VideoThread(QThread):
             self.msleep(40)
 
         # Cleanup
-        if use_picamera2: picam2.stop()
-        elif cap: cap.release()
+        cap.release()
 
     def process_recognition(self, img, last_name, consecutive):
         if self.recognizer is None:
@@ -313,8 +286,8 @@ class VideoThread(QThread):
                        # Validate crop
                        if crop.size == 0: continue
 
-                       save_img = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR) if PICAMERA2_AVAILABLE else crop
-                       cv2.imwrite(filename, save_img)
+                       # USB camera frames are already BGR
+                       cv2.imwrite(filename, crop)
                        
                        progress = int((self.capture_count / self.capture_target) * 100)
                        self.capture_progress_signal.emit(progress)
