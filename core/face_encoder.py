@@ -99,11 +99,11 @@ class FaceEncoder:
         valid_users = set()
         for d in os.listdir(self.known_faces_dir):
             if os.path.isdir(os.path.join(self.known_faces_dir, d)):
-                # Extract user name from folder "ID_Name" or "Name"
+                # Embeddings are stored under the full folder name ("ID_Name"),
+                # keep the bare name too for data from older versions
+                valid_users.add(d)
                 if "_" in d:
-                    valid_users.add(d.split('_')[1])
-                else:
-                    valid_users.add(d)
+                    valid_users.add(d.split('_', 1)[1])
         
         # 2. Filter existing embeddings
         initial_count = len(self.known_names)

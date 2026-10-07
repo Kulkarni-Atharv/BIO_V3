@@ -24,9 +24,10 @@ from PyQt5.QtGui import QImage, QPixmap, QFont, QColor, QPainter, QPen, QBrush, 
 from core.recognizer import FaceRecognizer
 from device.database import LocalDatabase
 from core.face_encoder import FaceEncoder
+from core.face_guide import RegistrationGuide, crop_face, MIN_VALID_SAMPLES
 from device.camera import open_usb_camera
 from shared.config import (
-    DEVICE_ID, KNOWN_FACES_DIR, VERIFICATION_FRAMES,
+    DEVICE_ID, KNOWN_FACES_DIR, NAMES_FILE, VERIFICATION_FRAMES,
     MQTT_BROKER, MQTT_PORT, MQTT_USERNAME, MQTT_PASSWORD,
     MQTT_TOPIC_RECEIVE_USERS, MQTT_TOPIC_REQUEST_USERS
 )
@@ -147,15 +148,17 @@ class VideoThread(QThread):
     change_pixmap_signal = pyqtSignal(QImage)
     attendance_signal = pyqtSignal(str) # Emits name (for recognition) or status (for capture)
     capture_progress_signal = pyqtSignal(int)
-    
+    guidance_signal = pyqtSignal(str, str, bool)  # step text, instruction, frame ok
+
     def __init__(self):
         super().__init__()
         self._run_flag = True
         self.mode = "RECOGNITION" # "RECOGNITION", "CAPTURE", "IDLE"
         self.mutex = QMutex()
-        self.capture_count = 0
-        self.capture_target = 30
+        self.guide = None
         self.capture_dir = ""
+        self.captured_files = []
+        self._last_guidance = None
         self.recognizer = None
 
     def set_mode(self, mode):
@@ -247,64 +250,86 @@ class VideoThread(QThread):
                 self.attendance_signal.emit(f"MATCH:{name}")
 
     def process_capture(self, img):
-        if self.recognizer is None or self.recognizer.detector is None:
+        guide = self.guide
+        if guide is None or self.recognizer is None or self.recognizer.detector is None:
             return
-            
+
         try:
+            if not self.capture_dir or not os.path.exists(self.capture_dir):
+                print(f"Error: Capture directory missing: {self.capture_dir}")
+                self.set_mode("IDLE")
+                return
+
+            clean = img.copy()  # saved samples must not contain the overlay
             h, w, _ = img.shape
             self.recognizer.detector.setInputSize((w, h))
-            _, faces = self.recognizer.detector.detect(img)
-            
-            if faces is not None:
-                for face in faces:
-                   box = face[:4].astype(int)
-                   x, y, w_box, h_box = box[0], box[1], box[2], box[3]
-                   
-                   center_x, center_y = x + w_box//2, y + h_box//2
-                   radius = int(min(w_box, h_box) / 1.5)
-                   # Draw guide
-                   cv2.circle(img, (center_x, center_y), radius, (255, 255, 0), 2)
-                   
-                   if self.capture_count < self.capture_target:
-                       self.capture_count += 1
-                       
-                       # Ensure directory exists before writing
-                       if not self.capture_dir or not os.path.exists(self.capture_dir):
-                           # Fallback or error - but don't crash
-                           print(f"Error: Capture directory missing: {self.capture_dir}")
-                           self.mode = "IDLE" 
-                           return
+            _, faces = self.recognizer.detector.detect(clean)
 
-                       filename = f"{self.capture_dir}/{self.capture_count}.jpg"
-                       margin = 20
-                       x1 = max(0, x - margin)
-                       y1 = max(0, y - margin)
-                       x2 = min(w, x + w_box + margin)
-                       y2 = min(h, y + h_box + margin)
-                       crop = img[y1:y2, x1:x2]
-                       
-                       # Validate crop
-                       if crop.size == 0: continue
+            ok, message, face = guide.evaluate(clean, faces)
 
-                       # USB camera frames are already BGR
-                       cv2.imwrite(filename, crop)
-                       
-                       progress = int((self.capture_count / self.capture_target) * 100)
-                       self.capture_progress_signal.emit(progress)
-                   else:
-                       self.mode = "IDLE"
-                       self.attendance_signal.emit("CAPTURE_COMPLETE")
-                       break
+            if ok and guide.ready_for_sample():
+                crop = crop_face(clean, face)
+                if crop.size > 0:
+                    filename = os.path.join(
+                        self.capture_dir, f"{guide.stage_key.lower()}_{int(time.time() * 1000)}.jpg")
+                    cv2.imwrite(filename, crop)  # USB camera frames are already BGR
+                    self.captured_files.append(filename)
+                    guide.accept_sample()
+                    self.capture_progress_signal.emit(guide.progress)
+
+                    if guide.done:
+                        self.set_mode("IDLE")
+                        self._emit_guidance("Done", "Face data captured - processing...", True)
+                        self.attendance_signal.emit("CAPTURE_COMPLETE")
+                        return
+                    if guide.stage_count == 0:  # just moved to the next pose
+                        ok, message = False, guide.instruction
+
+            self._draw_guide_overlay(img, face, ok, message)
+            self._emit_guidance(guide.stage_text, message, ok)
         except Exception as e:
             print(f"Capture Error: {e}")
-            self.mode = "IDLE" # Reset to safe state
+            self.set_mode("IDLE") # Reset to safe state
+
+    def _emit_guidance(self, step, message, ok):
+        # Only emit on change to avoid flooding the UI thread
+        state = (step, message, ok)
+        if state != self._last_guidance:
+            self._last_guidance = state
+            self.guidance_signal.emit(step, message, ok)
+
+    def _draw_guide_overlay(self, img, face, ok, message):
+        h, w, _ = img.shape
+        color = (0, 200, 0) if ok else (0, 165, 255)  # green / orange (BGR)
+        # Target oval where the face should be
+        cv2.ellipse(img, (w // 2, h // 2), (int(w * 0.20), int(h * 0.36)), 0, 0, 360, color, 3)
+        if face is not None:
+            x, y, bw, bh = face[:4].astype(int)
+            cv2.rectangle(img, (x, y), (x + bw, y + bh), color, 2)
+        # Instruction banner
+        cv2.rectangle(img, (0, h - 44), (w, h), (0, 0, 0), -1)
+        cv2.putText(img, message, (12, h - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
 
     def start_capture(self, user_id, user_name):
         self.capture_dir = os.path.join(KNOWN_FACES_DIR, f"{user_id}_{user_name}")
         if not os.path.exists(self.capture_dir):
             os.makedirs(self.capture_dir)
-        self.capture_count = 0
-        self.mode = "CAPTURE"
+        self.guide = RegistrationGuide()
+        self.captured_files = []
+        self._last_guidance = None
+        self.set_mode("CAPTURE")
+
+    def cancel_capture(self):
+        """Stop capturing and remove the samples saved in this session."""
+        self.set_mode("IDLE")
+        for f in self.captured_files:
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+        self.captured_files = []
+        if self.capture_dir and os.path.isdir(self.capture_dir) and not os.listdir(self.capture_dir):
+            os.rmdir(self.capture_dir)
 
     def stop(self):
         self._run_flag = False
@@ -435,6 +460,7 @@ class MainApp(QMainWindow):
         self.thread.change_pixmap_signal.connect(self.update_video_feed)
         self.thread.attendance_signal.connect(self.handle_video_signal)
         self.thread.capture_progress_signal.connect(self.update_capture_progress)
+        self.thread.guidance_signal.connect(self.update_guidance)
         self.thread.start()
 
         self.train_thread = TrainThread()
@@ -446,7 +472,8 @@ class MainApp(QMainWindow):
         self.mqtt_worker.start()
 
         self.last_recognized_time = 0
-        
+        self.reg_identity = None
+
     def init_home_screen(self):
         self.home_widget = QWidget()
         # Use a Grid Layout to overlay controls on top of video if needed
@@ -698,20 +725,28 @@ class MainApp(QMainWindow):
         
         self.btn_cancel_reg = QPushButton("Cancel")
         self.btn_cancel_reg.setStyleSheet("background-color: #fab387; color: #1e1e2e;")
-        self.btn_cancel_reg.clicked.connect(lambda: self.switch_screen(1))
-        
+        self.btn_cancel_reg.clicked.connect(self.cancel_registration)
+
         self.progress_ring = CircularProgress()
         self.progress_ring.hide()
-        
+
+        # Guided registration: current pose step + live instruction
+        self.lbl_step = QLabel("")
+        self.lbl_step.setAlignment(Qt.AlignCenter)
+        self.lbl_step.setStyleSheet("color: #89b4fa; font-size: 14px; font-weight: bold;")
+        self.lbl_step.hide()
+
         self.lbl_status = QLabel("Ready to Scan")
         self.lbl_status.setAlignment(Qt.AlignCenter)
-        
+        self.lbl_status.setWordWrap(True)
+
         form_layout.addWidget(lbl_title)
         form_layout.addSpacing(20)
         form_layout.addWidget(self.input_name)
         form_layout.addWidget(self.input_id)
         form_layout.addSpacing(20)
         form_layout.addWidget(self.progress_ring, alignment=Qt.AlignCenter)
+        form_layout.addWidget(self.lbl_step)
         form_layout.addWidget(self.lbl_status)
         form_layout.addStretch()
         form_layout.addWidget(self.btn_start)
@@ -1218,13 +1253,38 @@ class MainApp(QMainWindow):
             return
         
         self.btn_start.hide()
-        self.btn_cancel_reg.hide()
+        self.btn_cancel_reg.show()  # allow aborting while scanning
+        self.input_name.setEnabled(False)
+        self.input_id.setEnabled(False)
         self.progress_ring.set_value(0)
         self.progress_ring.show()
-        self.lbl_status.setText("Look at the camera...")
+        self.lbl_step.show()
+        self.lbl_status.setText("Look directly at the camera")
         self.lbl_status.setStyleSheet("color: #cdd6f4;")
-        
+
+        self.reg_identity = f"{uid}_{name}"
         self.thread.start_capture(uid, name)
+
+    def cancel_registration(self):
+        if self.thread.get_mode() == "CAPTURE":
+            self.thread.cancel_capture()
+        self.reset_registration()
+
+    def update_guidance(self, step, message, ok):
+        if self.central_widget.currentIndex() != 2:
+            return
+        self.lbl_step.setText(step)
+        self.lbl_status.setText(message)
+        color = "#a6e3a1" if ok else "#fab387"  # green when capturing, orange when user must adjust
+        self.lbl_status.setStyleSheet(f"color: {color}; font-size: 16px; font-weight: bold;")
+
+    def count_trained_samples(self, identity):
+        """Number of embeddings stored for this user after training."""
+        try:
+            with open(NAMES_FILE, 'r') as f:
+                return sum(1 for n in json.load(f) if n == identity)
+        except Exception:
+            return 0
 
     def update_video_feed(self, img):
         current_idx = self.central_widget.currentIndex()
@@ -1276,7 +1336,6 @@ class MainApp(QMainWindow):
 
     def update_capture_progress(self, val):
         self.progress_ring.set_value(val)
-        self.lbl_status.setText(f"Scanning... {val}%")
 
     def show_welcome(self, name):
         self.overlay.show_message(f"Welcome, {name}!")
@@ -1290,13 +1349,24 @@ class MainApp(QMainWindow):
     def on_training_complete(self, success, msg):
         if self.central_widget.currentIndex() == 2: # Register Mode
             if success:
-                self.lbl_status.setText("Registration Complete!")
                 self.thread.reload_model()
-                QTimer.singleShot(2000, self.reset_registration)
+                # Complete only if enough samples produced a usable embedding
+                valid = self.count_trained_samples(self.reg_identity)
+                if valid >= MIN_VALID_SAMPLES:
+                    self.lbl_step.setText("Done")
+                    self.lbl_status.setText(f"Registration Complete! ({valid} face samples)")
+                    self.lbl_status.setStyleSheet("color: #a6e3a1; font-size: 16px; font-weight: bold;")
+                    QTimer.singleShot(2000, self.reset_registration)
+                    return
+                self.lbl_status.setText(
+                    f"Not enough good face data ({valid}/{MIN_VALID_SAMPLES}). "
+                    f"Improve lighting and press Start Scanning again.")
             else:
                 self.lbl_status.setText("Error: " + msg)
-                self.btn_start.show()
-                self.btn_cancel_reg.show()
+            self.lbl_status.setStyleSheet("color: #f38ba8; font-size: 14px;")
+            self.btn_start.setText("Scan Again")
+            self.btn_start.show()
+            self.btn_cancel_reg.show()
         else:
              # Likely background update from delete
              if success:
@@ -1306,10 +1376,15 @@ class MainApp(QMainWindow):
         self.switch_screen(1) # Back to Settings
         self.input_name.clear()
         self.input_id.clear()
+        self.input_name.setEnabled(True)
+        self.input_id.setEnabled(True)
+        self.btn_start.setText("Start Scanning")
         self.btn_start.show()
         self.btn_cancel_reg.show()
         self.progress_ring.hide()
+        self.lbl_step.hide()
         self.lbl_status.setText("Ready")
+        self.lbl_status.setStyleSheet("color: #cdd6f4;")
         self.thread.set_mode("IDLE")  # Ensure we stop scanning when resetting
 
     def closeEvent(self, event):
