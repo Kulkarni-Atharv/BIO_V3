@@ -541,7 +541,7 @@ class MQTTWorker(QThread):
 class MainApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Bio-Access | Smart Attendance")
+        self.setWindowTitle("Autonex SmartAccess")
         self.setStyleSheet(STYLE_MAIN)
 
         # Home scan state
@@ -643,8 +643,8 @@ class MainApp(QMainWindow):
         header = QHBoxLayout()
         brand_box = QVBoxLayout()
         brand_box.setSpacing(0)
-        lbl_brand = QLabel("BIO-ACCESS")
-        lbl_brand.setStyleSheet(f"color: {C_BLUE}; font-size: 26px; font-weight: bold; letter-spacing: 3px;")
+        lbl_brand = QLabel("Autonex SmartAccess")
+        lbl_brand.setStyleSheet(f"color: {C_BLUE}; font-size: 26px; font-weight: bold; letter-spacing: 1px;")
         lbl_sub = QLabel(f"Machine Access  •  Device {DEVICE_ID}")
         lbl_sub.setStyleSheet(f"color: {C_MUTED}; font-size: 15px;")
         brand_box.addWidget(lbl_brand)
