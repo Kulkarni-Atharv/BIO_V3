@@ -124,6 +124,17 @@ source venv/bin/activate
 | LAN receiver | `python -m uvicorn server.api:app --host 0.0.0.0 --port 8000` (or `server\start_server.bat` on Windows) | PC |
 | Capture faces from terminal | `python3 scripts/capture_dataset.py` | Pi |
 
+### Main screen (HMI)
+The HMI starts full screen (designed for the 5" 1280x720 touch panel): live camera on one half, controls on the other
+(camera on top if the display is in portrait).
+1. Press **START** - the face is scanned for up to 10 s.
+2. The same person must match on `VERIFICATION_FRAMES` (default 5) consecutive frames before attendance is marked.
+3. A result card shows **ACCESS GRANTED** (name and ID) or **ACCESS DENIED / NO FACE DETECTED**,
+   then returns to START after 4 s.
+
+Recognition only runs during a scan, so the device is idle otherwise. **MENU** opens settings and user management.
+With a keyboard attached, **F11** toggles full screen and **Esc** leaves it.
+
 ### Registering a user (HMI) - guided
 1. Open **User Mgt -> Add User**, enter ID and name, press **Start Scanning**.
 2. Follow the on-screen instructions. Samples are captured in three steps:

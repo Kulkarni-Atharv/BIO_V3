@@ -13,12 +13,11 @@ from datetime import datetime
 import paho.mqtt.client as mqtt_client
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                             QHBoxLayout, QLabel, QPushButton, QLineEdit, 
-                             QStackedWidget, QMessageBox, QFrame, QSizePolicy, 
-                             QGraphicsDropShadowEffect, QListWidget, QListWidgetItem, QGridLayout,
-                             QToolButton)
-from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve, QSize, QMutex
-from PyQt5.QtGui import QImage, QPixmap, QFont, QColor, QPainter, QPen, QBrush, QIcon
+                             QHBoxLayout, QBoxLayout, QLabel, QPushButton, QLineEdit,
+                             QStackedWidget, QMessageBox, QFrame, QSizePolicy,
+                             QListWidget, QListWidgetItem, QGridLayout)
+from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QMutex
+from PyQt5.QtGui import QImage, QPixmap, QFont, QColor, QPainter, QPen
 
 # Import modules
 from core.recognizer import FaceRecognizer
@@ -32,78 +31,168 @@ from shared.config import (
     MQTT_TOPIC_RECEIVE_USERS, MQTT_TOPIC_REQUEST_USERS
 )
 
-# --- STYLESHEETS ---
-STYLE_MAIN = """
-QMainWindow {
-    background-color: #1e1e2e;
-}
-QLabel {
-    color: #cdd6f4;
-    font-family: 'Segoe UI', sans-serif;
-    font-size: 10px;
-}
-QLineEdit {
-    background-color: #313244;
-    color: #cdd6f4;
-    border: 1px solid #45475a;
-    border-radius: 4px;
-    padding: 4px;
-    font-size: 10px;
-}
-QLineEdit:focus {
-    border: 1px solid #89b4fa;
-}
-QPushButton {
-    background-color: #89b4fa;
-    color: #1e1e2e;
-    border: none;
-    border-radius: 6px;
-    padding: 6px;
-    font-size: 11px;
-    font-weight: bold;
-}
-QPushButton:hover {
-    background-color: #b4befe;
-}
-QPushButton:pressed {
-    background-color: #74c7ec;
-}
-QListWidget {
-    background-color: #313244;
+# --- THEME (dark industrial HMI, sized for a 5" 1280x720 touch panel) ---
+C_BG      = "#11111b"   # window background
+C_PANEL   = "#181825"   # panels / bars
+C_CARD    = "#1e1e2e"   # cards / tiles
+C_RAISED  = "#313244"   # buttons, inputs
+C_BORDER  = "#45475a"
+C_TEXT    = "#cdd6f4"
+C_MUTED   = "#a6adc8"
+C_BLUE    = "#89b4fa"
+C_GREEN   = "#a6e3a1"
+C_YELLOW  = "#f9e2af"
+C_RED     = "#f38ba8"
+
+SCAN_TIMEOUT_S = 10      # give up a scan after this many seconds
+RESULT_HOLD_MS = 4000    # how long the result card stays on screen
+
+STYLE_MAIN = f"""
+QMainWindow {{
+    background-color: {C_BG};
+}}
+QLabel {{
+    color: {C_TEXT};
+}}
+QLineEdit {{
+    background-color: {C_RAISED};
+    color: {C_TEXT};
+    border: 2px solid {C_BORDER};
     border-radius: 10px;
-    padding: 10px;
-    color: #cdd6f4;
-    font-size: 16px;
-    border: 1px solid #45475a;
-}
-QListWidget::item {
-    padding: 10px;
-    border-bottom: 1px solid #45475a;
-}
-QListWidget::item:selected {
-    background-color: #45475a;
-    border-radius: 5px;
-}
+    padding: 8px 14px;
+    min-height: 40px;
+    font-size: 22px;
+}}
+QLineEdit:focus {{
+    border: 2px solid {C_BLUE};
+}}
+QLineEdit:disabled {{
+    color: {C_MUTED};
+}}
+QPushButton {{
+    background-color: {C_BLUE};
+    color: {C_BG};
+    border: none;
+    border-radius: 12px;
+    padding: 12px 20px;
+    font-size: 20px;
+    font-weight: bold;
+}}
+QPushButton:pressed {{
+    background-color: #74c7ec;
+}}
+QPushButton:disabled {{
+    background-color: {C_RAISED};
+    color: #6c7086;
+}}
+QListWidget {{
+    background-color: {C_CARD};
+    border-radius: 12px;
+    padding: 8px;
+    color: {C_TEXT};
+    font-size: 20px;
+    border: 1px solid {C_RAISED};
+}}
+QListWidget::item {{
+    padding: 14px;
+    border-bottom: 1px solid {C_RAISED};
+}}
+QListWidget::item:selected {{
+    background-color: {C_RAISED};
+    border-radius: 8px;
+}}
+QScrollBar:vertical {{
+    background: {C_PANEL};
+    width: 28px;
+    margin: 0;
+}}
+QScrollBar::handle:vertical {{
+    background: {C_BORDER};
+    min-height: 60px;
+    border-radius: 12px;
+    margin: 3px;
+}}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+    height: 0;
+}}
+QMessageBox {{
+    background-color: {C_CARD};
+}}
+QMessageBox QLabel {{
+    font-size: 20px;
+    min-width: 360px;
+}}
+QMessageBox QPushButton {{
+    min-width: 140px;
+}}
 """
 
 # --- CUSTOM WIDGETS ---
-class OverlayLabel(QLabel):
+class ScanButton(QPushButton):
+    """Large round START button that turns into a progress ring while scanning."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setAlignment(Qt.AlignCenter)
-        self.setStyleSheet("""
-            background-color: rgba(0, 0, 0, 150);
-            color: #a6e3a1;
-            font-size: 24px;
-            font-weight: bold;
-            border-radius: 20px;
-        """)
-        self.hide()
+        self.setFixedSize(300, 300)
+        # Own stylesheet so the global QPushButton min-height/padding can't shrink it
+        self.setStyleSheet("QPushButton { min-width: 300px; max-width: 300px; min-height: 300px;"
+                           " max-height: 300px; padding: 0; border: none; background: transparent; }")
+        self.setCursor(Qt.PointingHandCursor)
+        self.scanning = False
+        self.progress = 0.0   # 0..1 while scanning
+        self.subtitle = "Tap to scan face"
 
-    def show_message(self, text, duration=2000):
-        self.setText(text)
-        self.show()
-        QTimer.singleShot(duration, self.hide)
+    def set_ready(self):
+        self.scanning = False
+        self.progress = 0.0
+        self.subtitle = "Tap to scan face"
+        self.setEnabled(True)
+        self.update()
+
+    def set_scanning(self, progress):
+        self.scanning = True
+        self.progress = max(0.0, min(1.0, progress))
+        self.subtitle = f"{max(0, int(SCAN_TIMEOUT_S * (1 - self.progress) + 0.99))} s"
+        self.setEnabled(False)
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        outer = self.rect().adjusted(8, 8, -8, -8)
+        inner = self.rect().adjusted(30, 30, -30, -30)
+
+        if self.scanning:
+            # Track + progress arc
+            p.setPen(QPen(QColor(C_RAISED), 16))
+            p.drawEllipse(outer)
+            p.setPen(QPen(QColor(C_BLUE), 16, Qt.SolidLine, Qt.RoundCap))
+            p.drawArc(outer, 90 * 16, -int(360 * 16 * self.progress))
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(C_CARD))
+            p.drawEllipse(inner)
+            title, title_color, sub_color = "SCANNING", C_BLUE, C_MUTED
+        else:
+            # Soft halo + solid green button
+            p.setPen(QPen(QColor(166, 227, 161, 70), 16))
+            p.drawEllipse(outer)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor("#8fd18a") if self.isDown() else QColor(C_GREEN))
+            p.drawEllipse(inner)
+            title, title_color, sub_color = "START", C_BG, "#2f5131"
+
+        f = QFont(self.font())
+        f.setPixelSize(52 if not self.scanning else 34)
+        f.setBold(True)
+        p.setFont(f)
+        p.setPen(QColor(title_color))
+        p.drawText(inner.adjusted(0, -30, 0, -30), Qt.AlignCenter, title)
+
+        f.setPixelSize(20)
+        f.setBold(False)
+        p.setFont(f)
+        p.setPen(QColor(sub_color))
+        p.drawText(inner.adjusted(0, 50, 0, 50), Qt.AlignCenter, self.subtitle)
 
 class CircularProgress(QWidget):
     def __init__(self, parent=None):
@@ -246,8 +335,14 @@ class VideoThread(QThread):
             cv2.line(img, (x+w, y+h), (x+w - l_len, y+h), color, t)
             cv2.line(img, (x+w, y+h), (x+w, y+h - l_len), color, t)
 
-            if name != "Unknown":
-                self.attendance_signal.emit(f"MATCH:{name}")
+        # One status per processed frame so the UI can count consecutive matches
+        known = [n for n in names if n != "Unknown"]
+        if known:
+            self.attendance_signal.emit(f"MATCH:{known[0]}")
+        elif names:
+            self.attendance_signal.emit("UNKNOWN")
+        else:
+            self.attendance_signal.emit("NOFACE")
 
     def process_capture(self, img):
         guide = self.guide
@@ -428,8 +523,14 @@ class MainApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Bio-Access | Smart Attendance")
-        self.resize(480, 320)
         self.setStyleSheet(STYLE_MAIN)
+
+        # Home scan state
+        self.scan_state = "IDLE"      # IDLE | SCANNING | RESULT
+        self.scan_started = 0.0
+        self.match_identity = None
+        self.match_count = 0
+        self.face_seen = False
         
         self.db = LocalDatabase()
         
@@ -471,219 +572,292 @@ class MainApp(QMainWindow):
         self.mqtt_worker.users_updated.connect(self.refresh_employee_list)
         self.mqtt_worker.start()
 
-        self.last_recognized_time = 0
         self.reg_identity = None
+        self.reset_home()
 
     def init_home_screen(self):
+        """Main kiosk screen: live camera on one half, START / result panel on the other."""
         self.home_widget = QWidget()
-        # Use a Grid Layout to overlay controls on top of video if needed
-        # But wait, video is a widget. Best way: QStackedLayout or parenting children to video_label?
-        # A clean way: Main Video Widget, and overlays are children of it or siblings in a grid (0,0,1,1)
-        
-        main_layout = QGridLayout(self.home_widget)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # 1. Video Background
-        self.video_container = QLabel("Initializing Camera...")
+        # Side by side on a landscape panel, stacked on a portrait one (see resizeEvent)
+        self.home_layout = QBoxLayout(QBoxLayout.LeftToRight, self.home_widget)
+        self.apply_orientation()
+        self.home_layout.setContentsMargins(16, 16, 16, 16)
+        self.home_layout.setSpacing(16)
+
+        # ── Camera panel ──────────────────────────────────────────────────
+        cam_panel = QFrame()
+        cam_panel.setObjectName("camPanel")
+        cam_panel.setStyleSheet(f"#camPanel {{ background-color: #000; border: 2px solid {C_RAISED}; border-radius: 16px; }}")
+        cam_layout = QGridLayout(cam_panel)
+        cam_layout.setContentsMargins(4, 4, 4, 4)
+
+        self.video_container = QLabel("Starting camera...")
         self.video_container.setAlignment(Qt.AlignCenter)
-        self.video_container.setScaledContents(True)
-        self.video_container.setStyleSheet("background-color: black;")
-        # Add to grid at (0,0) spanning everything
-        main_layout.addWidget(self.video_container, 0, 0, 4, 4) 
+        self.video_container.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.video_container.setStyleSheet("color: #6c7086; font-size: 20px; background: transparent;")
+        cam_layout.addWidget(self.video_container, 0, 0)
 
-        # 2. Time/Date Overlay (Top Left)
-        self.time_overlay = QFrame()
-        self.time_overlay.setStyleSheet("""
-            background-color: rgba(0, 0, 0, 160); 
-            border-radius: 8px;
-            color: white;
-            border: 1px solid rgba(255, 255, 255, 30);
-        """)
-        # Scaled down size (was 360x140 -> ~160x60)
-        self.time_overlay.setFixedSize(160, 65)
-        
-        time_layout = QVBoxLayout(self.time_overlay)
-        time_layout.setContentsMargins(10, 5, 10, 5)
-        time_layout.setSpacing(0)
-        
-        time_top_layout = QHBoxLayout()
-        self.lbl_date_overlay = QLabel("2024-01-01")
-        self.lbl_date_overlay.setFont(QFont("Segoe UI", 9))
-        self.lbl_date_overlay.setStyleSheet("color: #b4befe; font-weight: bold;")
-        
-        self.lbl_day_overlay = QLabel("MON")
-        self.lbl_day_overlay.setFont(QFont("Segoe UI", 9, QFont.Bold))
-        self.lbl_day_overlay.setStyleSheet("color: #fab387;")
-        self.lbl_day_overlay.setAlignment(Qt.AlignRight)
-        
-        time_top_layout.addWidget(self.lbl_date_overlay)
-        time_top_layout.addStretch()
-        time_top_layout.addWidget(self.lbl_day_overlay)
-        
-        self.lbl_time_overlay = QLabel("12:00:00")
-        self.lbl_time_overlay.setFont(QFont("Segoe UI", 24, QFont.Bold))
-        self.lbl_time_overlay.setStyleSheet("color: white;")
-        self.lbl_time_overlay.setAlignment(Qt.AlignCenter)
-        
-        time_layout.addLayout(time_top_layout)
-        time_layout.addWidget(self.lbl_time_overlay)
-        
-        # Add to grid Top-Left with some margin
-        main_layout.addWidget(self.time_overlay, 0, 0, Qt.AlignTop | Qt.AlignLeft)
-        main_layout.setContentsMargins(5, 5, 5, 5)
-        
-        # 3. Network Status Overlay (Top Right)
-        self.network_overlay = QFrame()
-        self.network_overlay.setStyleSheet("""
-            background-color: rgba(0, 0, 0, 100); 
-            border-radius: 6px;
-            color: white;
-            padding: 2px;
-        """)
-        # Implicit size via layout
-        
-        net_layout = QHBoxLayout(self.network_overlay)
-        net_layout.setContentsMargins(5, 2, 5, 2)
-        
-        self.lbl_net_icon = QLabel("🔌") # Default LAN
-        self.lbl_net_icon.setFont(QFont("Segoe UI", 12))
-        
-        self.lbl_net_ip = QLabel("127.0.0.1")
-        self.lbl_net_ip.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        self.lbl_net_ip.setStyleSheet("color: #a6e3a1;")
-        
-        net_layout.addWidget(self.lbl_net_icon)
-        net_layout.addSpacing(5)
-        net_layout.addWidget(self.lbl_net_ip)
-        
-        main_layout.addWidget(self.network_overlay, 0, 3, Qt.AlignTop | Qt.AlignRight)
+        self.lbl_cam_badge = QLabel("●  LIVE")
+        self.lbl_cam_badge.setStyleSheet(
+            f"background-color: rgba(17,17,27,200); color: {C_GREEN}; font-size: 16px; font-weight: bold;"
+            "padding: 6px 14px; border-radius: 14px; margin: 12px;")
+        cam_layout.addWidget(self.lbl_cam_badge, 0, 0, Qt.AlignTop | Qt.AlignLeft)
 
-        # 4. Hidden Menu Button (Transparent overlay or bottom center)
-        self.btn_menu_overlay = QPushButton("⚙️") 
-        self.btn_menu_overlay.setFixedSize(40, 40)
-        self.btn_menu_overlay.setCursor(Qt.PointingHandCursor)
-        self.btn_menu_overlay.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(0, 0, 0, 100);
-                color: rgba(255, 255, 255, 180);
-                border-radius: 20px;
-                font-size: 20px;
-            }
-            QPushButton:hover {
-                background-color: rgba(0, 0, 0, 200);
-                color: white;
-            }
-        """)
-        self.btn_menu_overlay.clicked.connect(lambda: self.switch_screen(1))
-        # Add to Bottom-Center
-        main_layout.addWidget(self.btn_menu_overlay, 3, 1, 1, 2, Qt.AlignBottom | Qt.AlignCenter)
-        
-        # 5. Welcome Overlay (Existing)
-        self.overlay = OverlayLabel(self.video_container) # Use video as parent
-        self.overlay.resize(400, 80)
-        self.overlay.move(120, 300) # Centered roughly
-        
-        # Setup Timer for Clock & Network Check
+        self.lbl_cam_hint = QLabel("Stand in front of the camera")
+        self.lbl_cam_hint.setStyleSheet(
+            f"background-color: rgba(17,17,27,210); color: {C_TEXT}; font-size: 20px; font-weight: bold;"
+            "padding: 10px 22px; border-radius: 18px; margin: 16px;")
+        cam_layout.addWidget(self.lbl_cam_hint, 0, 0, Qt.AlignBottom | Qt.AlignHCenter)
+
+        # ── Control panel ─────────────────────────────────────────────────
+        panel = QFrame()
+        panel.setObjectName("ctrlPanel")
+        panel.setStyleSheet(f"#ctrlPanel {{ background-color: {C_PANEL}; border: 1px solid {C_RAISED}; border-radius: 16px; }}")
+        v = QVBoxLayout(panel)
+        v.setContentsMargins(28, 18, 28, 18)
+        v.setSpacing(6)
+
+        # Header: brand + network status
+        header = QHBoxLayout()
+        brand_box = QVBoxLayout()
+        brand_box.setSpacing(0)
+        lbl_brand = QLabel("BIO-ACCESS")
+        lbl_brand.setStyleSheet(f"color: {C_BLUE}; font-size: 26px; font-weight: bold; letter-spacing: 3px;")
+        lbl_sub = QLabel(f"Attendance Terminal  •  Device {DEVICE_ID}")
+        lbl_sub.setStyleSheet(f"color: {C_MUTED}; font-size: 15px;")
+        brand_box.addWidget(lbl_brand)
+        brand_box.addWidget(lbl_sub)
+        self.lbl_net = QLabel("●  OFFLINE")
+        header.addLayout(brand_box)
+        header.addStretch()
+        header.addWidget(self.lbl_net, alignment=Qt.AlignTop)
+        v.addLayout(header)
+
+        # Clock
+        self.lbl_clock = QLabel("00:00:00")
+        self.lbl_clock.setAlignment(Qt.AlignCenter)
+        self.lbl_clock.setStyleSheet(f"color: {C_TEXT}; font-size: 56px; font-weight: bold;")
+        self.lbl_date = QLabel("")
+        self.lbl_date.setAlignment(Qt.AlignCenter)
+        self.lbl_date.setStyleSheet(f"color: {C_MUTED}; font-size: 20px;")
+        v.addWidget(self.lbl_clock)
+        v.addWidget(self.lbl_date)
+
+        # Action area: START button (page 0) / result card (page 1)
+        self.home_stack = QStackedWidget()
+
+        page_btn = QWidget()
+        pb = QVBoxLayout(page_btn)
+        pb.setContentsMargins(0, 0, 0, 0)
+        self.btn_scan = ScanButton()
+        self.btn_scan.clicked.connect(self.start_scan)
+        pb.addWidget(self.btn_scan, alignment=Qt.AlignCenter)
+        self.home_stack.addWidget(page_btn)
+
+        page_result = QFrame()
+        page_result.setObjectName("resultCard")
+        rc = QVBoxLayout(page_result)
+        rc.setContentsMargins(20, 10, 20, 10)
+        rc.setSpacing(8)
+        rc.addStretch()
+        self.lbl_result_icon = QLabel("✓")
+        self.lbl_result_icon.setFixedSize(120, 120)
+        self.lbl_result_icon.setAlignment(Qt.AlignCenter)
+        self.lbl_result_title = QLabel("")
+        self.lbl_result_title.setAlignment(Qt.AlignCenter)
+        self.lbl_result_name = QLabel("")
+        self.lbl_result_name.setAlignment(Qt.AlignCenter)
+        self.lbl_result_name.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.lbl_result_detail = QLabel("")
+        self.lbl_result_detail.setAlignment(Qt.AlignCenter)
+        self.lbl_result_detail.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.lbl_result_detail.setStyleSheet(f"color: {C_MUTED}; font-size: 20px;")
+        self.lbl_result_pill = QLabel("")
+        self.lbl_result_pill.setAlignment(Qt.AlignCenter)
+        rc.addWidget(self.lbl_result_icon, alignment=Qt.AlignCenter)
+        rc.addWidget(self.lbl_result_title)
+        rc.addWidget(self.lbl_result_name)
+        rc.addWidget(self.lbl_result_detail)
+        rc.addWidget(self.lbl_result_pill, alignment=Qt.AlignCenter)
+        rc.addStretch()
+        self.home_stack.addWidget(page_result)
+
+        v.addWidget(self.home_stack, stretch=1)
+
+        # Live status line
+        self.lbl_home_status = QLabel("")
+        self.lbl_home_status.setAlignment(Qt.AlignCenter)
+        self.lbl_home_status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.lbl_home_status.setFixedHeight(56)
+        v.addWidget(self.lbl_home_status)
+
+        # Footer: cancel (while scanning) + menu
+        footer = QHBoxLayout()
+        footer.setSpacing(12)
+        self.btn_cancel_scan = QPushButton("CANCEL")
+        self.btn_cancel_scan.setFixedHeight(64)
+        self.btn_cancel_scan.setStyleSheet(
+            f"QPushButton {{ background-color: transparent; color: {C_RED}; border: 2px solid {C_RED}; font-size: 20px; }}"
+            f"QPushButton:pressed {{ background-color: rgba(243,139,168,40); }}")
+        self.btn_cancel_scan.clicked.connect(self.reset_home)
+        self.btn_menu = QPushButton("MENU")
+        self.btn_menu.setFixedSize(180, 64)
+        self.btn_menu.setStyleSheet(
+            f"QPushButton {{ background-color: {C_RAISED}; color: {C_TEXT}; font-size: 20px; }}"
+            f"QPushButton:pressed {{ background-color: {C_BORDER}; }}"
+            f"QPushButton:disabled {{ color: #6c7086; }}")
+        self.btn_menu.clicked.connect(lambda: self.switch_screen(1))
+        footer.addWidget(self.btn_cancel_scan, stretch=1)
+        footer.addStretch()
+        footer.addWidget(self.btn_menu)
+        v.addLayout(footer)
+
+        self.home_layout.addWidget(cam_panel, stretch=1)
+        self.home_layout.addWidget(panel, stretch=1)
+
+        # Timers: clock/network (1 s), scan progress (100 ms), result hold (single shot)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_home_ui)
         self.timer.start(1000)
+
+        self.scan_timer = QTimer(self)
+        self.scan_timer.timeout.connect(self.on_scan_tick)
+
+        self.result_timer = QTimer(self)
+        self.result_timer.setSingleShot(True)
+        self.result_timer.timeout.connect(self.reset_home)
+
         self.update_home_ui()
-        
+        self.check_network_status()
         self.central_widget.addWidget(self.home_widget)
+
+    # --- HOME: SCAN FLOW ---
+    def set_home_status(self, text, color=C_MUTED):
+        self.lbl_home_status.setText(text)
+        self.lbl_home_status.setStyleSheet(f"color: {color}; font-size: 22px; font-weight: bold;")
+
+    def reset_home(self):
+        """Back to the idle START screen."""
+        self.scan_state = "IDLE"
+        self.scan_timer.stop()
+        self.result_timer.stop()
+        if self.central_widget.currentIndex() == 0 and hasattr(self, "thread"):
+            self.thread.set_mode("IDLE")   # live preview only, no recognition
+        self.home_stack.setCurrentIndex(0)
+        self.lbl_clock.show()
+        self.lbl_date.show()
+        self.btn_scan.set_ready()
+        self.btn_cancel_scan.hide()
+        self.btn_menu.setEnabled(True)
+        self.lbl_cam_hint.setText("Stand in front of the camera")
+        self.set_home_status("Ready  —  press START to mark attendance")
+
+    def start_scan(self):
+        if self.scan_state != "IDLE":
+            return
+        self.scan_state = "SCANNING"
+        self.scan_started = time.time()
+        self.match_identity, self.match_count, self.face_seen = None, 0, False
+        self.btn_scan.set_scanning(0)
+        self.btn_cancel_scan.show()
+        self.btn_menu.setEnabled(False)
+        self.lbl_cam_hint.setText("Look directly at the camera")
+        self.set_home_status("Scanning face...", C_BLUE)
+        self.scan_timer.start(100)
+        self.thread.set_mode("RECOGNITION")
+
+    def on_scan_tick(self):
+        elapsed = time.time() - self.scan_started
+        self.btn_scan.set_scanning(elapsed / SCAN_TIMEOUT_S)
+        if elapsed >= SCAN_TIMEOUT_S:
+            if self.face_seen:
+                self.show_result("FAIL", "ACCESS DENIED", "Face not recognised",
+                                 "Try again or contact the administrator")
+            else:
+                self.show_result("FAIL", "NO FACE DETECTED", "",
+                                 "Stand in front of the camera")
+
+    def handle_home_recognition(self, msg):
+        if self.scan_state != "SCANNING":
+            return
+        if msg == "NOFACE":
+            self.match_identity, self.match_count = None, 0
+            self.lbl_cam_hint.setText("No face  —  look at the camera")
+            self.set_home_status("Looking for a face...", C_BLUE)
+        elif msg == "UNKNOWN":
+            self.face_seen = True
+            self.match_identity, self.match_count = None, 0
+            self.lbl_cam_hint.setText("Hold still")
+            self.set_home_status("Verifying...", C_BLUE)
+        elif msg.startswith("MATCH:"):
+            self.face_seen = True
+            identity = msg[len("MATCH:"):]
+            if identity == self.match_identity:
+                self.match_count += 1
+            else:
+                self.match_identity, self.match_count = identity, 1
+            self.lbl_cam_hint.setText("Hold still")
+            self.set_home_status(f"Verifying...  {self.match_count}/{VERIFICATION_FRAMES}", C_BLUE)
+            if self.match_count >= VERIFICATION_FRAMES:
+                self.complete_scan(identity)
+
+    def complete_scan(self, identity):
+        # Folder / identity format is "ID_Name" (or just "Name" for old data)
+        user_id, name = identity.split("_", 1) if "_" in identity else (identity, identity)
+        self.db.add_record(DEVICE_ID, name, user_id=user_id)
+        self.show_result("OK", "ACCESS GRANTED", name, f"ID {user_id}")
+
+    def show_result(self, kind, title, name, detail, pill=""):
+        self.scan_state = "RESULT"
+        self.scan_timer.stop()
+        self.thread.set_mode("IDLE")
+        color, icon = {"OK": (C_GREEN, "✓"), "FAIL": (C_RED, "✕")}[kind]
+        self.lbl_result_icon.setText(icon)
+        self.lbl_result_icon.setStyleSheet(
+            f"background-color: {color}; color: {C_BG}; border-radius: 60px; font-size: 64px; font-weight: bold;")
+        self.lbl_result_title.setText(title)
+        self.lbl_result_title.setStyleSheet(f"color: {color}; font-size: 28px; font-weight: bold; letter-spacing: 2px;")
+        self.lbl_result_name.setText(name)
+        # Shrink long names instead of letting them widen the panel
+        name_px = 36 if len(name) <= 18 else 28 if len(name) <= 26 else 22
+        self.lbl_result_name.setStyleSheet(f"color: {C_TEXT}; font-size: {name_px}px; font-weight: bold;")
+        self.lbl_result_name.setVisible(bool(name))
+        self.lbl_result_detail.setText(detail)
+        self.lbl_result_pill.setText(pill)
+        self.lbl_result_pill.setVisible(bool(pill))
+        self.lbl_result_pill.setStyleSheet(
+            f"color: {color}; border: 2px solid {color}; border-radius: 16px; padding: 6px 18px;"
+            "font-size: 18px; font-weight: bold;")
+        self.lbl_clock.hide()   # give the result card the full panel height
+        self.lbl_date.hide()
+        self.home_stack.setCurrentIndex(1)
+        self.btn_cancel_scan.hide()
+        self.btn_menu.setEnabled(True)
+        self.lbl_cam_hint.setText("Thank you" if kind == "OK" else "Press START to try again")
+        self.set_home_status("Returning to start...", C_MUTED)
+        self.result_timer.start(RESULT_HOLD_MS)
 
     def init_settings_screen(self):
         self.settings_widget = QWidget()
         main_layout = QVBoxLayout(self.settings_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        
-        # Top Bar
-        top_bar = QFrame()
-        top_bar.setStyleSheet("background-color: #1e1e2e; border-bottom: 2px solid #585b70;")
-        top_bar.setFixedHeight(80)
-        top_bar_layout = QHBoxLayout(top_bar)
-        top_bar_layout.setContentsMargins(20, 10, 20, 10)
-        
-        btn_back = QPushButton("< ESC")
-        btn_back.setFixedSize(100, 50)
-        btn_back.setStyleSheet("""
-            QPushButton {
-                background-color: transparent; 
-                color: #cdd6f4;
-                font-size: 20px;
-                font-weight: bold;
-                border: none;
-            }
-            QPushButton:hover { color: #89b4fa; }
-        """)
-        btn_back.clicked.connect(lambda: self.switch_screen(0))
-        
-        lbl_title = QLabel("MENU")
-        # Match style of create_top_bar (16px Bold)
-        lbl_title.setFont(QFont("Segoe UI", 16, QFont.Bold))
-        lbl_title.setStyleSheet("color: #cdd6f4; font-size: 16px; font-weight: bold;") 
-        lbl_title.setAlignment(Qt.AlignCenter)
-        
-        top_bar_layout.addWidget(btn_back)
-        top_bar_layout.addStretch()
-        top_bar_layout.addWidget(lbl_title)
-        top_bar_layout.addStretch()
-        # Add a dummy widget to balance the center alignment
-        dummy = QWidget()
-        dummy.setFixedSize(60, 40) # Matched size of back button roughly
-        top_bar_layout.addWidget(dummy)
-        
-        main_layout.addWidget(top_bar)
-        
-        # Grid Menu Container
+
+        main_layout.addWidget(self.create_top_bar("MENU", lambda: self.switch_screen(0)))
+
         grid_container = QWidget()
         grid_layout = QGridLayout(grid_container)
-        grid_layout.setContentsMargins(40, 40, 40, 40)
-        grid_layout.setSpacing(15)
-        
-        # Helper to create grid buttons
-        def create_grid_btn(text, icon_emoji, row, col, callback=None):
-            btn = QToolButton()
-            btn.setText(f"{icon_emoji}\n{text}")
-            btn.setFont(QFont("Segoe UI", 16, QFont.Bold))
-            btn.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            btn.setCursor(Qt.PointingHandCursor)
-            
-            # Replicating the blue tile style
-            btn.setStyleSheet("""
-                QToolButton {
-                    background-color: #0078d7; 
-                    color: white;
-                    border: none;
-                    border-radius: 0px; 
-                    padding: 10px;
-                    font-size: 18px;
-                }
-                QToolButton:hover {
-                    background-color: #0063b1;
-                }
-                QToolButton:pressed {
-                    background-color: #005a9e;
-                }
-            """)
-            
-            # Using emojis as icons roughly matching the image
-            # Ideally we'd use QIcon with actual resource files
-            
-            if callback:
-                btn.clicked.connect(callback)
-            
-            grid_layout.addWidget(btn, row, col)
-            return btn
+        grid_layout.setContentsMargins(32, 28, 32, 28)
+        grid_layout.setSpacing(20)
 
-        # Row 0
-        create_grid_btn("User Mgt", "👥", 0, 0, lambda: self.switch_screen(6))
-        create_grid_btn("Shift", "📅", 0, 1, lambda: self.switch_screen(7))
-        
-        # Row 1
-        create_grid_btn("Comm set", "⚙️", 1, 0, lambda: self.switch_screen(8))
-        create_grid_btn("Sys info", "ℹ️", 1, 1, self.show_about_screen)
+        self.create_grid_btn(grid_layout, "User Management", "Add, list and remove users", 0, 0,
+                             lambda: self.switch_screen(6), C_BLUE)
+        self.create_grid_btn(grid_layout, "Shift", "Working hours and grace time", 0, 1,
+                             lambda: self.switch_screen(7), C_YELLOW)
+        self.create_grid_btn(grid_layout, "Communication", "Device, Ethernet and WiFi", 1, 0,
+                             lambda: self.switch_screen(8), C_GREEN)
+        self.create_grid_btn(grid_layout, "System Info", "Network address and version", 1, 1,
+                             self.show_about_screen, C_MUTED)
 
         main_layout.addWidget(grid_container)
         self.central_widget.addWidget(self.settings_widget)
@@ -703,28 +877,38 @@ class MainApp(QMainWindow):
     def init_register_screen(self):
         self.reg_widget = QWidget()
         layout = QHBoxLayout(self.reg_widget)
-        
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(16)
+
         # Left: Form
-        form_container = QWidget()
+        form_container = QFrame()
+        form_container.setObjectName("regForm")
+        form_container.setStyleSheet(f"#regForm {{ background-color: {C_PANEL}; border: 1px solid {C_RAISED}; border-radius: 16px; }}")
         form_layout = QVBoxLayout(form_container)
-        form_layout.setContentsMargins(50, 50, 50, 50)
-        form_layout.setSpacing(20)
-        
+        form_layout.setContentsMargins(28, 24, 28, 24)
+        form_layout.setSpacing(14)
+
         lbl_title = QLabel("New User Registration")
-        lbl_title.setFont(QFont("Segoe UI", 24, QFont.Bold))
-        lbl_title.setStyleSheet("color: #89b4fa;")
-        
+        lbl_title.setStyleSheet(f"color: {C_BLUE}; font-size: 28px; font-weight: bold;")
+
         self.input_name = QLineEdit()
         self.input_name.setPlaceholderText("Full Name")
-        
+
         self.input_id = QLineEdit()
         self.input_id.setPlaceholderText("Employee ID")
-        
+
         self.btn_start = QPushButton("Start Scanning")
+        self.btn_start.setFixedHeight(68)
+        self.btn_start.setStyleSheet(
+            f"QPushButton {{ background-color: {C_GREEN}; color: {C_BG}; font-size: 22px; }}"
+            "QPushButton:pressed { background-color: #8fd18a; }")
         self.btn_start.clicked.connect(self.start_registration)
-        
+
         self.btn_cancel_reg = QPushButton("Cancel")
-        self.btn_cancel_reg.setStyleSheet("background-color: #fab387; color: #1e1e2e;")
+        self.btn_cancel_reg.setFixedHeight(60)
+        self.btn_cancel_reg.setStyleSheet(
+            f"QPushButton {{ background-color: transparent; color: {C_RED}; border: 2px solid {C_RED}; font-size: 20px; }}"
+            "QPushButton:pressed { background-color: rgba(243,139,168,40); }")
         self.btn_cancel_reg.clicked.connect(self.cancel_registration)
 
         self.progress_ring = CircularProgress()
@@ -733,34 +917,34 @@ class MainApp(QMainWindow):
         # Guided registration: current pose step + live instruction
         self.lbl_step = QLabel("")
         self.lbl_step.setAlignment(Qt.AlignCenter)
-        self.lbl_step.setStyleSheet("color: #89b4fa; font-size: 14px; font-weight: bold;")
+        self.lbl_step.setStyleSheet(f"color: {C_BLUE}; font-size: 20px; font-weight: bold;")
         self.lbl_step.hide()
 
         self.lbl_status = QLabel("Ready to Scan")
         self.lbl_status.setAlignment(Qt.AlignCenter)
         self.lbl_status.setWordWrap(True)
+        self.lbl_status.setStyleSheet(f"color: {C_TEXT}; font-size: 20px;")
 
         form_layout.addWidget(lbl_title)
-        form_layout.addSpacing(20)
+        form_layout.addSpacing(6)
         form_layout.addWidget(self.input_name)
         form_layout.addWidget(self.input_id)
-        form_layout.addSpacing(20)
         form_layout.addWidget(self.progress_ring, alignment=Qt.AlignCenter)
         form_layout.addWidget(self.lbl_step)
         form_layout.addWidget(self.lbl_status)
         form_layout.addStretch()
         form_layout.addWidget(self.btn_start)
         form_layout.addWidget(self.btn_cancel_reg)
-        
+
         # Right: Camera Preview
         self.video_label_reg = QLabel()
-        self.video_label_reg.setFixedSize(480, 640)
-        self.video_label_reg.setStyleSheet("background-color: black; border-radius: 20px;")
-        self.video_label_reg.setScaledContents(True)
+        self.video_label_reg.setAlignment(Qt.AlignCenter)
+        self.video_label_reg.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.video_label_reg.setStyleSheet(f"background-color: #000; border: 2px solid {C_RAISED}; border-radius: 16px;")
 
-        layout.addWidget(form_container, stretch=1)
-        layout.addWidget(self.video_label_reg)
-        
+        layout.addWidget(form_container, stretch=2)
+        layout.addWidget(self.video_label_reg, stretch=3)
+
         self.central_widget.addWidget(self.reg_widget)
 
     def init_delete_screen(self):
@@ -768,36 +952,7 @@ class MainApp(QMainWindow):
         main_layout = QVBoxLayout(self.del_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Top Bar
-        top_bar = QFrame()
-        top_bar.setStyleSheet("background-color: #1e1e2e; border-bottom: 1px solid #45475a;")
-        top_bar.setFixedHeight(100)
-        top_bar_layout = QHBoxLayout(top_bar)
-        top_bar_layout.setContentsMargins(50, 20, 50, 20)
-        
-        btn_back = QPushButton("← Back")
-        btn_back.setFixedSize(120, 50)
-        btn_back.setStyleSheet("""
-            QPushButton {
-                background-color: #313244;
-                color: #cdd6f4;
-                border-radius: 10px;
-                font-size: 16px;
-            }
-            QPushButton:hover { background-color: #45475a; }
-        """)
-        btn_back.clicked.connect(lambda: self.switch_screen(1))
-        
-        lbl_title = QLabel("Delete User")
-        lbl_title.setFont(QFont("Segoe UI", 36, QFont.Bold))
-        lbl_title.setStyleSheet("color: #f38ba8;")
-        
-        top_bar_layout.addWidget(btn_back)
-        top_bar_layout.addStretch()
-        top_bar_layout.addWidget(lbl_title)
-        top_bar_layout.addStretch()
-        
-        main_layout.addWidget(top_bar)
+        main_layout.addWidget(self.create_top_bar("Delete User", lambda: self.switch_screen(6)))
         
         # Content
         content = QWidget()
@@ -855,36 +1010,7 @@ class MainApp(QMainWindow):
         main_layout = QVBoxLayout(self.about_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Top Bar
-        top_bar = QFrame()
-        top_bar.setStyleSheet("background-color: #1e1e2e; border-bottom: 1px solid #45475a;")
-        top_bar.setFixedHeight(100)
-        top_bar_layout = QHBoxLayout(top_bar)
-        top_bar_layout.setContentsMargins(50, 20, 50, 20)
-        
-        btn_back = QPushButton("← Back")
-        btn_back.setFixedSize(120, 50)
-        btn_back.setStyleSheet("""
-            QPushButton {
-                background-color: #313244;
-                color: #cdd6f4;
-                border-radius: 10px;
-                font-size: 16px;
-            }
-            QPushButton:hover { background-color: #45475a; }
-        """)
-        btn_back.clicked.connect(lambda: self.switch_screen(1))
-        
-        lbl_title = QLabel("About System")
-        lbl_title.setFont(QFont("Segoe UI", 36, QFont.Bold))
-        lbl_title.setStyleSheet("color: #a6e3a1;")
-        
-        top_bar_layout.addWidget(btn_back)
-        top_bar_layout.addStretch()
-        top_bar_layout.addWidget(lbl_title)
-        top_bar_layout.addStretch()
-        
-        main_layout.addWidget(top_bar)
+        main_layout.addWidget(self.create_top_bar("System Info", lambda: self.switch_screen(1)))
         
         # Content
         content = QWidget()
@@ -938,57 +1064,31 @@ class MainApp(QMainWindow):
         return card
 
     def update_home_ui(self):
-        # Update Time
         now = datetime.now()
-        self.lbl_time_overlay.setText(now.strftime("%H:%M:%S"))
-        self.lbl_date_overlay.setText(now.strftime("%Y-%m-%d"))
-        self.lbl_day_overlay.setText(now.strftime("%a").upper())
-        
-        # Update Network (Every 5 seconds roughly or just check quickly)
-        # Optimization: Only check every 5th second
-        if int(now.timestamp()) % 5 == 0:
+        self.lbl_clock.setText(now.strftime("%H:%M:%S"))
+        self.lbl_date.setText(now.strftime("%A, %d %B %Y"))
+        if now.second % 5 == 0:
             self.check_network_status()
 
     def check_network_status(self):
-        ip = "127.0.0.1"
-        icon = "❌" # Disconnected
-        color = "#f38ba8" 
-        
         try:
-            # Simple check
+            # UDP "connect" sends no packets; it only selects the outgoing interface
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            # Try connecting to Google DNS to get external facing IP
             s.connect(("8.8.8.8", 80))
             ip = s.getsockname()[0]
             s.close()
-            
-            # Simple Heuristic for Icon (Linux specific mostly)
-            # On Windows, hard to tell without psutil.
-            # Assuming if IP exists -> Connected.
-            # Default to LAN icon if we can't tell.
-            icon = "🔌" # LAN
-            
-            # Try to guess WiFi based on common interface names if on Linux
-            if os.path.exists("/proc/net/wireless"):
-                with open("/proc/net/wireless", "r") as f:
-                    if "wlan" in f.read():
-                         icon = "📶" # WiFi
-                         
-            color = "#a6e3a1" # Green
-            
-        except:
-            ip = "Disconnected"
-            icon = "❌"
-            color = "#f38ba8"
-
-        self.lbl_net_ip.setText(ip)
-        self.lbl_net_icon.setText(icon)
-        self.lbl_net_ip.setStyleSheet(f"color: {color};")
+            text, color = f"●  {ip}", C_GREEN
+        except Exception:
+            text, color = "●  OFFLINE", C_RED
+        self.lbl_net.setText(text)
+        self.lbl_net.setStyleSheet(
+            f"color: {color}; background-color: {C_CARD}; border: 1px solid {C_RAISED};"
+            "border-radius: 16px; padding: 6px 14px; font-size: 16px; font-weight: bold;")
 
     def switch_screen(self, index):
         self.central_widget.setCurrentIndex(index)
         if index == 0:
-            self.thread.set_mode("RECOGNITION")
+            self.reset_home()
         elif index == 2:  # Register
             self.thread.set_mode("IDLE")
         elif index == 12: # Employee List — always refresh on open
@@ -1000,6 +1100,7 @@ class MainApp(QMainWindow):
     def init_user_mgt_menu(self):
         self.user_mgt_widget = QWidget()
         layout = QVBoxLayout(self.user_mgt_widget)
+        layout.setContentsMargins(0, 0, 0, 0)
         
         # Top Bar
         top_bar = self.create_top_bar("User Management", lambda: self.switch_screen(1))
@@ -1008,13 +1109,13 @@ class MainApp(QMainWindow):
         # Grid
         grid_container = QWidget()
         grid = QGridLayout(grid_container)
-        grid.setContentsMargins(50, 50, 50, 50)
+        grid.setContentsMargins(32, 28, 32, 28)
         grid.setSpacing(20)
         
-        self.create_grid_btn(grid, "Add User",       "👤", 0, 0, lambda: self.switch_screen(2))
-        self.create_grid_btn(grid, "Employee List",  "📋", 0, 1, lambda: self.switch_screen(12))
-        self.create_grid_btn(grid, "User View",      "👀", 1, 0, lambda: self.refresh_user_view_and_show())
-        self.create_grid_btn(grid, "Delete User",    "🗑️", 1, 1, self.refresh_delete_list_and_show)
+        self.create_grid_btn(grid, "Add User",      "Register a new face", 0, 0, lambda: self.switch_screen(2), C_GREEN)
+        self.create_grid_btn(grid, "Employee List", "Synced from dashboard", 0, 1, lambda: self.switch_screen(12), C_BLUE)
+        self.create_grid_btn(grid, "User View",     "Registered faces on device", 1, 0, self.refresh_user_view_and_show, C_MUTED)
+        self.create_grid_btn(grid, "Delete User",   "Remove a registered face", 1, 1, self.refresh_delete_list_and_show, C_RED)
         
         layout.addWidget(grid_container)
         self.central_widget.addWidget(self.user_mgt_widget)
@@ -1022,6 +1123,7 @@ class MainApp(QMainWindow):
     def init_user_view_screen(self):
         self.user_view_widget = QWidget()
         layout = QVBoxLayout(self.user_view_widget)
+        layout.setContentsMargins(0, 0, 0, 0)
         
         layout.addWidget(self.create_top_bar("User List", lambda: self.switch_screen(6)))
         
@@ -1037,6 +1139,7 @@ class MainApp(QMainWindow):
     def init_shift_screen(self):
         self.shift_widget = QWidget()
         layout = QVBoxLayout(self.shift_widget)
+        layout.setContentsMargins(0, 0, 0, 0)
         
         layout.addWidget(self.create_top_bar("Shift Management", lambda: self.switch_screen(1)))
         
@@ -1069,17 +1172,18 @@ class MainApp(QMainWindow):
     def init_comm_set_menu(self):
         self.comm_menu_widget = QWidget()
         layout = QVBoxLayout(self.comm_menu_widget)
+        layout.setContentsMargins(0, 0, 0, 0)
         
         layout.addWidget(self.create_top_bar("Communication", lambda: self.switch_screen(1)))
         
         grid_container = QWidget()
         grid = QGridLayout(grid_container)
-        grid.setContentsMargins(50, 50, 50, 50)
+        grid.setContentsMargins(32, 28, 32, 28)
         grid.setSpacing(20)
         
-        self.create_grid_btn(grid, "Comm Params", "⚙️", 0, 0, lambda: self.switch_screen(9))
-        self.create_grid_btn(grid, "Ethernet", "🌐", 0, 1, lambda: self.switch_screen(10))
-        self.create_grid_btn(grid, "WIFI", "📶", 1, 0, lambda: self.switch_screen(11))
+        self.create_grid_btn(grid, "Comm Params", "Device ID and port", 0, 0, lambda: self.switch_screen(9), C_BLUE)
+        self.create_grid_btn(grid, "Ethernet", "Wired network settings", 0, 1, lambda: self.switch_screen(10), C_GREEN)
+        self.create_grid_btn(grid, "WiFi", "Wireless network", 1, 0, lambda: self.switch_screen(11), C_YELLOW)
         
         layout.addWidget(grid_container)
         self.central_widget.addWidget(self.comm_menu_widget)
@@ -1087,6 +1191,7 @@ class MainApp(QMainWindow):
     def init_comm_params_screen(self):
         self.comm_params_widget = QWidget()
         layout = QVBoxLayout(self.comm_params_widget)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.create_top_bar("Comm Params", lambda: self.switch_screen(8)))
         
         form = QWidget()
@@ -1108,6 +1213,7 @@ class MainApp(QMainWindow):
     def init_ethernet_screen(self):
         self.eth_widget = QWidget()
         layout = QVBoxLayout(self.eth_widget)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.create_top_bar("Ethernet Settings", lambda: self.switch_screen(8)))
         
         form = QWidget()
@@ -1144,6 +1250,7 @@ class MainApp(QMainWindow):
     def init_wifi_screen(self):
         self.wifi_widget = QWidget()
         layout = QVBoxLayout(self.wifi_widget)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.create_top_bar("WiFi Settings", lambda: self.switch_screen(8)))
         
         lbl = QLabel("WiFi Scanning not implemented yet.")
@@ -1155,42 +1262,66 @@ class MainApp(QMainWindow):
     # --- HELPERS ---
     def create_top_bar(self, title, back_callback):
         frame = QFrame()
-        frame.setStyleSheet("background-color: #1e1e2e; border-bottom: 2px solid #585b70;")
-        # Reduced height for 320px height screen
-        frame.setFixedHeight(40)
+        frame.setObjectName("topBar")
+        frame.setStyleSheet(f"#topBar {{ background-color: {C_PANEL}; border-bottom: 2px solid {C_RAISED}; }}")
+        frame.setFixedHeight(84)
         layout = QHBoxLayout(frame)
-        layout.setContentsMargins(5, 5, 5, 5)
-        
-        btn = QPushButton("<")
-        btn.setStyleSheet("background-color: transparent; color: #cdd6f4; font-size: 14px; border: none; font-weight: bold;")
+        layout.setContentsMargins(14, 10, 14, 10)
+
+        btn = QPushButton("‹  BACK")
+        btn.setFixedSize(160, 62)
+        btn.setStyleSheet(
+            f"QPushButton {{ background-color: {C_RAISED}; color: {C_TEXT}; font-size: 20px; }}"
+            f"QPushButton:pressed {{ background-color: {C_BORDER}; }}")
         btn.clicked.connect(back_callback)
-        
+
         lbl = QLabel(title)
-        lbl.setStyleSheet("color: #cdd6f4; font-size: 16px; font-weight: bold;")
+        lbl.setStyleSheet(f"color: {C_TEXT}; font-size: 28px; font-weight: bold; letter-spacing: 1px;")
         lbl.setAlignment(Qt.AlignCenter)
-        
+
         layout.addWidget(btn)
         layout.addWidget(lbl, stretch=1)
-        # Dummy for balance
-        d = QWidget(); d.setFixedSize(20, 10); layout.addWidget(d)
-        
+        # Spacer the same width as the back button keeps the title centred
+        d = QWidget(); d.setFixedSize(160, 10); layout.addWidget(d)
+
         return frame
 
-    def create_grid_btn(self, layout, text, icon, row, col, callback):
-        btn = QToolButton()
-        # Scaled down fonts
-        btn.setText(f"{icon}\n{text}")
-        btn.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        btn.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+    def create_grid_btn(self, layout, title, subtitle, row, col, callback, accent=C_BLUE):
+        """Large touch tile with a title, a one-line description and a coloured accent edge."""
+        btn = QPushButton()
         btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        btn.setMinimumHeight(120)
         btn.setCursor(Qt.PointingHandCursor)
-        btn.setStyleSheet("""
-            QToolButton { background-color: #0078d7; color: white; border: none; padding: 5px; font-size: 12px; }
-            QToolButton:hover { background-color: #0063b1; }
-        """)
+        btn.setStyleSheet(
+            f"QPushButton {{ background-color: {C_CARD}; border: 1px solid {C_RAISED};"
+            f" border-radius: 14px; padding: 0; }}"
+            f"QPushButton:pressed {{ background-color: {C_RAISED}; }}")
+        row_layout = QHBoxLayout(btn)
+        row_layout.setContentsMargins(14, 18, 20, 18)
+        row_layout.setSpacing(18)
+        stripe = QFrame()
+        stripe.setFixedWidth(6)
+        stripe.setStyleSheet(f"background-color: {accent}; border: none; border-radius: 3px;")
+        stripe.setAttribute(Qt.WA_TransparentForMouseEvents)
+        row_layout.addWidget(stripe)
+        inner = QVBoxLayout()
+        inner.setSpacing(6)
+        row_layout.addLayout(inner, stretch=1)
+        lbl_title = QLabel(title)
+        lbl_title.setStyleSheet(f"color: {C_TEXT}; font-size: 26px; font-weight: bold; background: transparent; border: none;")
+        lbl_sub = QLabel(subtitle)
+        lbl_sub.setWordWrap(True)
+        lbl_sub.setStyleSheet(f"color: {C_MUTED}; font-size: 17px; background: transparent; border: none;")
+        for lbl in (lbl_title, lbl_sub):
+            lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
+        inner.addStretch()
+        inner.addWidget(lbl_title)
+        inner.addWidget(lbl_sub)
+        inner.addStretch()
         if callback:
             btn.clicked.connect(callback)
         layout.addWidget(btn, row, col)
+        return btn
 
     def refresh_user_view_and_show(self):
         self.user_list_view.clear()
@@ -1249,7 +1380,7 @@ class MainApp(QMainWindow):
         uid = self.input_id.text()
         if not name or not uid:
             self.lbl_status.setText("Enter Name and ID")
-            self.lbl_status.setStyleSheet("color: #f38ba8;")
+            self.lbl_status.setStyleSheet(f"color: {C_RED}; font-size: 20px;")
             return
         
         self.btn_start.hide()
@@ -1260,7 +1391,7 @@ class MainApp(QMainWindow):
         self.progress_ring.show()
         self.lbl_step.show()
         self.lbl_status.setText("Look directly at the camera")
-        self.lbl_status.setStyleSheet("color: #cdd6f4;")
+        self.lbl_status.setStyleSheet(f"color: {C_TEXT}; font-size: 20px;")
 
         self.reg_identity = f"{uid}_{name}"
         self.thread.start_capture(uid, name)
@@ -1276,7 +1407,7 @@ class MainApp(QMainWindow):
         self.lbl_step.setText(step)
         self.lbl_status.setText(message)
         color = "#a6e3a1" if ok else "#fab387"  # green when capturing, orange when user must adjust
-        self.lbl_status.setStyleSheet(f"color: {color}; font-size: 16px; font-weight: bold;")
+        self.lbl_status.setStyleSheet(f"color: {color}; font-size: 22px; font-weight: bold;")
 
     def count_trained_samples(self, identity):
         """Number of embeddings stored for this user after training."""
@@ -1288,63 +1419,43 @@ class MainApp(QMainWindow):
 
     def update_video_feed(self, img):
         current_idx = self.central_widget.currentIndex()
-        # Only show video in Home(0) and Register(2)
         if current_idx == 0:
-            target = self.video_container
+            # Home: mirrored like a selfie view, filled to the panel without stretching
+            target, fill = self.video_container, True
+            img = img.mirrored(True, False)
         elif current_idx == 2:
-            target = self.video_label_reg
+            # Registration: whole frame visible (not mirrored, so left/right instructions match)
+            target, fill = self.video_label_reg, False
         else:
             return
-        
+
         try:
+            size = target.size()
             pixmap = QPixmap.fromImage(img)
+            if size.width() > 10 and size.height() > 10:
+                if fill:
+                    pixmap = pixmap.scaled(size, Qt.KeepAspectRatioByExpanding, Qt.FastTransformation)
+                    x = (pixmap.width() - size.width()) // 2
+                    y = (pixmap.height() - size.height()) // 2
+                    pixmap = pixmap.copy(x, y, size.width(), size.height())
+                else:
+                    pixmap = pixmap.scaled(size, Qt.KeepAspectRatio, Qt.FastTransformation)
             target.setPixmap(pixmap)
-        except:
+        except Exception:
             # Silently ignore any Qt errors during screen transitions
             pass
 
     def handle_video_signal(self, msg):
         current_idx = self.central_widget.currentIndex()
         if current_idx == 0: # Home
-            if msg.startswith("MATCH:"):
-                # msg format: "MATCH:ID_Name" or "MATCH:Name"
-                # If FaceEncoder uses folder name, it could be "101_Atharv"
-                full_identity = msg.split("MATCH:")[1]
-                
-                user_id = full_identity
-                name = full_identity
-                
-                # Check if formatted as ID_Name
-                # Simple check: digits followed by underscore
-                # Or just split by first underscore
-                if "_" in full_identity:
-                    parts = full_identity.split('_', 1) 
-                    # Attempt to see if first part is ID-like? 
-                    # Actually, let's just assume strict "ID_Name" format for simplicity if underscore exists
-                    user_id = parts[0]
-                    name = parts[1]
-
-                now = time.time()
-                if now - self.last_recognized_time > 3.0: 
-                    self.last_recognized_time = now
-                    self.show_welcome(name)
-                    self.log_attendance(user_id, name)
+            self.handle_home_recognition(msg)
         elif current_idx == 2: # Register
-             if msg == "CAPTURE_COMPLETE":
+            if msg == "CAPTURE_COMPLETE":
                 self.lbl_status.setText("Processing Profile...")
                 self.train_thread.start()
 
     def update_capture_progress(self, val):
         self.progress_ring.set_value(val)
-
-    def show_welcome(self, name):
-        self.overlay.show_message(f"Welcome, {name}!")
-
-    def log_attendance(self, user_id, name):
-        # time_str removed as it's handled in DB
-        # Call updated add_record with user_id
-        # Confidence is not passed from Recognizer yet, default to 0.0 or update recognizer later
-        self.db.add_record(DEVICE_ID, name, user_id=user_id)
 
     def on_training_complete(self, success, msg):
         if self.central_widget.currentIndex() == 2: # Register Mode
@@ -1355,7 +1466,7 @@ class MainApp(QMainWindow):
                 if valid >= MIN_VALID_SAMPLES:
                     self.lbl_step.setText("Done")
                     self.lbl_status.setText(f"Registration Complete! ({valid} face samples)")
-                    self.lbl_status.setStyleSheet("color: #a6e3a1; font-size: 16px; font-weight: bold;")
+                    self.lbl_status.setStyleSheet(f"color: {C_GREEN}; font-size: 22px; font-weight: bold;")
                     QTimer.singleShot(2000, self.reset_registration)
                     return
                 self.lbl_status.setText(
@@ -1363,7 +1474,7 @@ class MainApp(QMainWindow):
                     f"Improve lighting and press Start Scanning again.")
             else:
                 self.lbl_status.setText("Error: " + msg)
-            self.lbl_status.setStyleSheet("color: #f38ba8; font-size: 14px;")
+            self.lbl_status.setStyleSheet(f"color: {C_RED}; font-size: 20px;")
             self.btn_start.setText("Scan Again")
             self.btn_start.show()
             self.btn_cancel_reg.show()
@@ -1384,12 +1495,8 @@ class MainApp(QMainWindow):
         self.progress_ring.hide()
         self.lbl_step.hide()
         self.lbl_status.setText("Ready")
-        self.lbl_status.setStyleSheet("color: #cdd6f4;")
+        self.lbl_status.setStyleSheet(f"color: {C_TEXT}; font-size: 20px;")
         self.thread.set_mode("IDLE")  # Ensure we stop scanning when resetting
-
-    def closeEvent(self, event):
-        self.thread.stop()
-        event.accept()
 
     def init_employee_list_screen(self):
         """Screen 12 — Employee list from dashboard with face-registration status."""
@@ -1403,14 +1510,14 @@ class MainApp(QMainWindow):
         layout.addWidget(top_bar)
 
         # Hint label
-        hint = QLabel("Tap ⚠️ row to register face")
+        hint = QLabel("Tap a yellow row to register that employee's face")
         hint.setAlignment(Qt.AlignCenter)
-        hint.setStyleSheet("color: #f9e2af; font-size: 11px; padding: 2px;")
+        hint.setStyleSheet(f"color: {C_YELLOW}; font-size: 17px; padding: 8px;")
         layout.addWidget(hint)
 
         # List widget
         self.emp_list_view = QListWidget()
-        self.emp_list_view.setFont(QFont("Segoe UI", 13))
+        self.emp_list_view.setFont(QFont("Segoe UI", 16))
         self.emp_list_view.setStyleSheet("""
             QListWidget {
                 background-color: #1e1e2e;
@@ -1435,17 +1542,17 @@ class MainApp(QMainWindow):
         layout.addWidget(self.emp_list_view)
 
         # Bottom refresh button
-        btn_refresh = QPushButton("🔄  Refresh List")
-        btn_refresh.setFixedHeight(36)
+        btn_refresh = QPushButton("Refresh List")
+        btn_refresh.setFixedHeight(64)
         btn_refresh.setStyleSheet("""
             QPushButton {
                 background-color: #313244;
                 color: #cdd6f4;
                 border: none;
                 border-radius: 0px;
-                font-size: 12px;
+                font-size: 20px;
             }
-            QPushButton:hover { background-color: #45475a; }
+            QPushButton:pressed { background-color: #45475a; }
         """)
         btn_refresh.clicked.connect(self.refresh_employee_list)
         layout.addWidget(btn_refresh)
@@ -1479,11 +1586,11 @@ class MainApp(QMainWindow):
             is_registered = (uid in registered_ids)
 
             if is_registered:
-                badge = "✅"
+                badge = "✓"
                 color = "#a6e3a1"   # green
                 left_border = "#a6e3a1"
             else:
-                badge = "⚠️"
+                badge = "!"
                 color = "#f9e2af"   # yellow
                 left_border = "#f9e2af"
 
@@ -1499,7 +1606,7 @@ class MainApp(QMainWindow):
         # Status summary at bottom
         total = len(users)
         reg_count = sum(1 for u in users if u["user_id"] in registered_ids)
-        summary = QListWidgetItem(f"  📊  {reg_count}/{total} registered")
+        summary = QListWidgetItem(f"  {reg_count} of {total} employees registered")
         summary.setForeground(QColor("#89b4fa"))
         summary.setFlags(summary.flags() & ~Qt.ItemIsSelectable)
         self.emp_list_view.addItem(summary)
@@ -1526,7 +1633,7 @@ class MainApp(QMainWindow):
         self.input_name.setText(name)
         self.input_id.setText(uid)
         self.lbl_status.setText("Ready to Scan")
-        self.lbl_status.setStyleSheet("color: #cdd6f4;")
+        self.lbl_status.setStyleSheet(f"color: {C_TEXT}; font-size: 20px;")
         self.btn_start.show()
         self.btn_cancel_reg.show()
         self.progress_ring.hide()
@@ -1537,6 +1644,27 @@ class MainApp(QMainWindow):
         self.mqtt_worker.stop()
         self.mqtt_worker.wait()
         event.accept()
+
+    def apply_orientation(self):
+        # Landscape panel: camera | controls side by side. Portrait panel: camera on top.
+        # Uses the physical screen size (the window itself can't shrink below the landscape layout).
+        screen = QApplication.primaryScreen()
+        size = screen.size() if screen else self.size()
+        portrait = size.height() > size.width()
+        self.home_layout.setDirection(QBoxLayout.TopToBottom if portrait else QBoxLayout.LeftToRight)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.apply_orientation()   # follows a display rotation at runtime
+
+    def keyPressEvent(self, event):
+        # Maintenance with a keyboard attached: F11 toggles full screen, Esc leaves it
+        if event.key() == Qt.Key_F11:
+            self.showNormal() if self.isFullScreen() else self.showFullScreen()
+        elif event.key() == Qt.Key_Escape and self.isFullScreen():
+            self.showNormal()
+        else:
+            super().keyPressEvent(event)
 
 
 if __name__ == "__main__":
@@ -1556,14 +1684,13 @@ if __name__ == "__main__":
 
     app = QApplication(sys.argv)
     
-    # Font
-    font = QFont("Segoe UI", 10)
+    # Font (falls back to the system sans font on Raspberry Pi OS)
+    font = QFont("Segoe UI", 12)
     app.setFont(font)
-    
+
     try:
         window = MainApp()
-        # window.showFullScreen() 
-        window.show()
+        window.showFullScreen()  # kiosk: fill the whole 1280x720 panel
         sys.exit(app.exec_())
     except Exception as e:
         print(f"Application Crashed: {e}")
