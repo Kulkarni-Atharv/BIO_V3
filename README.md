@@ -108,6 +108,12 @@ Edit [shared/config.py](shared/config.py):
 | `LAN_SERVER_IP` / `LAN_SERVER_PORT` | PC running `server/api.py` | `192.168.1.100:8000` |
 | `MQTT_BROKER` / `MQTT_PORT` / `MQTT_USERNAME` / `MQTT_PASSWORD` | EMQX cloud broker (TLS) | - |
 | `MQTT_TOPIC_*` | MQTT topics (see below) | - |
+| `RELAY_GPIO_PIN` | GPIO (BCM) driving the machine relay / LED | `17` |
+| `RELAY_ACTIVE_HIGH` | `False` if the relay board switches on LOW | `True` |
+| `RELAY_ON_SECONDS` | Relay ON time after ACCESS GRANTED (`0` = until next scan) | `10` |
+
+The relay is handled by [device/relay.py](device/relay.py) (uses `gpiozero`, preinstalled on Raspberry Pi OS).
+Test the wiring with `python3 device/relay.py` - it switches ON for 2 s, then OFF.
 
 ## Usage
 Always activate the environment first:
