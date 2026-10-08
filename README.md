@@ -109,11 +109,13 @@ Edit [shared/config.py](shared/config.py):
 | `MQTT_BROKER` / `MQTT_PORT` / `MQTT_USERNAME` / `MQTT_PASSWORD` | EMQX cloud broker (TLS) | - |
 | `MQTT_TOPIC_*` | MQTT topics (see below) | - |
 | `RELAY_GPIO_PIN` | GPIO (BCM) driving the machine relay / LED | `17` |
-| `RELAY_ACTIVE_HIGH` | `False` if the relay board switches on LOW | `True` |
-| `RELAY_ON_SECONDS` | Relay ON time after ACCESS GRANTED (`0` = until next scan) | `10` |
+| `RELAY_ACTIVE_HIGH` | `False` for relay boards that switch ON with a LOW signal | `False` |
+| `RELAY_ON_SECONDS` | Relay ON time after ACCESS GRANTED (`0` = until hmi.py stops) | `0` |
 
 The relay is handled by [device/relay.py](device/relay.py) (uses `gpiozero`, preinstalled on Raspberry Pi OS).
-Test the wiring with `python3 device/relay.py` - it switches ON for 2 s, then OFF.
+The relay is OFF until a face is authenticated, then stays ON until hmi.py stops. For active-low boards OFF releases
+the pin instead of driving it HIGH (3.3V does not switch a 5V board off).
+Test the wiring with `python3 device/relay.py` - OFF for 2 s, ON for 2 s, then OFF.
 
 ## Usage
 Always activate the environment first:

@@ -758,7 +758,6 @@ class MainApp(QMainWindow):
         if self.scan_state != "IDLE":
             return
         self.scan_state = "SCANNING"
-        self.relay.off()   # previous operator's access ends when a new scan starts
         self.scan_started = time.time()
         self.match_identity, self.match_count, self.face_seen = None, 0, False
         self.btn_scan.set_scanning(0)
