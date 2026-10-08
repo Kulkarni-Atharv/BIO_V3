@@ -160,6 +160,7 @@ The footer shows **MACHINE ON / MACHINE OFF**. Recognition only runs during a sc
    The oval and face box turn **green** while capturing and **orange** when the user needs to adjust.
 3. Training runs automatically. Registration is marked **complete only if at least 20 samples produced a usable face embedding**; otherwise the user is asked to scan again.
 4. **Cancel** during scanning removes the samples captured in that session.
+5. Tapping a text box (name, ID, settings) opens the on-screen keyboard; **DONE** closes it.
 
 Thresholds (face size, centring, brightness, sharpness, head-turn angle, samples per step) are in [core/face_guide.py](core/face_guide.py).
 

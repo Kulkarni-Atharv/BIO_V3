@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QBoxLayout, QLabel, QPushButton, QLineEdit,
                              QStackedWidget, QMessageBox, QFrame, QSizePolicy,
                              QListWidget, QListWidgetItem, QGridLayout)
-from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QMutex
+from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QMutex, QEvent
 from PyQt5.QtGui import QImage, QPixmap, QFont, QColor, QPainter, QPen
 
 # Import modules
@@ -251,6 +251,113 @@ class CircularProgress(QWidget):
         w = fm.width(text)
         h = fm.height()
         painter.drawText(-w//2, h//4, text)
+
+class VirtualKeyboard(QFrame):
+    """On-screen keyboard for the touch panel. Types into whichever QLineEdit has focus."""
+
+    ROWS = [
+        list("1234567890"),
+        list("qwertyuiop"),
+        list("asdfghjkl"),
+        ["SHIFT"] + list("zxcvbnm") + ["BACK"],
+        ["SPACE", ".", "-", ":", "DONE"],
+    ]
+    STRETCH = {"SHIFT": 3, "BACK": 3, "SPACE": 12, "DONE": 4}
+    LABELS = {"SHIFT": "⇧", "BACK": "⌫", "SPACE": "space", "DONE": "DONE"}
+    KEY_H = 54
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setObjectName("vkb")
+        self.setStyleSheet(
+            f"#vkb {{ background-color: {C_PANEL}; border-top: 2px solid {C_BORDER}; }}"
+            f"QPushButton {{ background-color: {C_RAISED}; color: {C_TEXT}; border-radius: 10px;"
+            f" padding: 0; font-size: 24px; font-weight: normal; }}"
+            f"QPushButton:pressed {{ background-color: {C_BORDER}; }}"
+            f"QPushButton[special='true'] {{ background-color: {C_CARD}; color: {C_MUTED}; font-size: 22px; }}"
+            f"QPushButton[special='true']:pressed {{ background-color: {C_BORDER}; }}"
+            f"QPushButton[active='true'] {{ background-color: {C_BLUE}; color: {C_BG}; }}"
+            f"QPushButton[done='true'] {{ background-color: {C_GREEN}; color: {C_BG}; font-weight: bold; }}")
+        self.shift = False
+        self.letter_keys = []
+        self.shift_key = None
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(6)
+        for i, row in enumerate(self.ROWS):
+            h = QHBoxLayout()
+            h.setSpacing(6)
+            if i == 2:
+                h.addStretch(1)   # stagger the home row like a real keyboard
+            for key in row:
+                h.addWidget(self._make_key(key), stretch=self.STRETCH.get(key, 2))
+            if i == 2:
+                h.addStretch(1)
+            layout.addLayout(h)
+        self.setFixedHeight(self.sizeHint().height())
+        self.hide()
+
+    def _make_key(self, key):
+        btn = QPushButton(self.LABELS.get(key, key))
+        btn.setFocusPolicy(Qt.NoFocus)   # keep focus (and the cursor) in the text box
+        btn.setFixedHeight(self.KEY_H)
+        btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        if key in ("SHIFT", "BACK", "SPACE"):
+            btn.setProperty("special", True)
+        if key == "DONE":
+            btn.setProperty("done", True)
+        if key == "SHIFT":
+            self.shift_key = btn
+        if len(key) == 1 and key.isalpha():
+            self.letter_keys.append(btn)
+        btn.clicked.connect(lambda _, k=key: self._press(k))
+        return btn
+
+    def _set_shift(self, on):
+        self.shift = on
+        for btn in self.letter_keys:
+            btn.setText(btn.text().upper() if on else btn.text().lower())
+        self.shift_key.setProperty("active", on)
+        self.shift_key.style().unpolish(self.shift_key)
+        self.shift_key.style().polish(self.shift_key)
+
+    def _press(self, key):
+        if key == "DONE":
+            self.close_keyboard()
+            return
+        if key == "SHIFT":
+            self._set_shift(not self.shift)
+            return
+        target = QApplication.focusWidget()
+        if not isinstance(target, QLineEdit):
+            return
+        if key == "BACK":
+            target.backspace()
+        elif key == "SPACE":
+            target.insert(" ")
+            self._set_shift(True)    # capitalise the next word (names)
+        else:
+            target.insert(key.upper() if self.shift else key)
+            if self.shift:
+                self._set_shift(False)
+
+    def show_for(self, line_edit):
+        # Capitalise the first letter when the box is empty
+        self._set_shift(not line_edit.text())
+        self.place()
+        self.show()
+        self.raise_()
+
+    def place(self):
+        parent = self.parentWidget()
+        self.setGeometry(0, parent.height() - self.height(), parent.width(), self.height())
+
+    def close_keyboard(self):
+        self.hide()
+        target = QApplication.focusWidget()
+        if isinstance(target, QLineEdit):
+            target.clearFocus()
 
 # --- WORKER THREADS ---
 class VideoThread(QThread):
@@ -577,6 +684,10 @@ class MainApp(QMainWindow):
         self.init_wifi_screen()      # 11
         
         self.init_employee_list_screen() # 12
+
+        # On-screen keyboard: opens when any text box gets focus
+        self.keyboard = VirtualKeyboard(self)
+        QApplication.instance().installEventFilter(self)
         
         # NOW start the video thread after all widgets exist
         self.thread = VideoThread()
@@ -1152,6 +1263,8 @@ class MainApp(QMainWindow):
             "border-radius: 16px; padding: 6px 14px; font-size: 16px; font-weight: bold;")
 
     def switch_screen(self, index):
+        if hasattr(self, "keyboard"):
+            self.keyboard.close_keyboard()
         self.central_widget.setCurrentIndex(index)
         if index == 0:
             self.reset_home()
@@ -1720,8 +1833,25 @@ class MainApp(QMainWindow):
         portrait = size.height() > size.width()
         self.home_layout.setDirection(QBoxLayout.TopToBottom if portrait else QBoxLayout.LeftToRight)
 
+    def eventFilter(self, obj, event):
+        # Show the on-screen keyboard when the user taps a text box in this window
+        # (not when Qt moves focus by itself, e.g. on entering a screen)
+        etype = event.type()
+        if (etype == QEvent.MouseButtonPress and isinstance(obj, QLineEdit)
+                and obj.isEnabled() and obj.window() is self):
+            self.keyboard.show_for(obj)
+        elif etype == QEvent.FocusOut and isinstance(obj, QLineEdit):
+            QTimer.singleShot(0, self._hide_keyboard_if_unfocused)
+        return False
+
+    def _hide_keyboard_if_unfocused(self):
+        if not isinstance(QApplication.focusWidget(), QLineEdit):
+            self.keyboard.hide()
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        if hasattr(self, "keyboard") and self.keyboard.isVisible():
+            self.keyboard.place()
         self.apply_orientation()   # follows a display rotation at runtime
 
     def keyPressEvent(self, event):
