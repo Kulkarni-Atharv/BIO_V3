@@ -48,5 +48,5 @@ VERIFICATION_FRAMES   = 5
 
 # ─── Machine Relay (LED for now) ─────────────────────────────────────────────
 RELAY_GPIO_PIN    = 17     # BCM numbering (physical pin 11)
-RELAY_ACTIVE_HIGH = True   # False if the relay board switches on a LOW signal
+RELAY_ACTIVE_HIGH = False  # relay board switches ON with a LOW signal (active-low); True for active-high boards
 RELAY_ON_SECONDS  = 10     # ON time after a successful scan; 0 = stay ON until the next scan
