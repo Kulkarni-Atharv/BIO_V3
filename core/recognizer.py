@@ -18,6 +18,9 @@ from shared.config import (
     DETECTION_THRESHOLD, RECOGNITION_THRESHOLD
 )
 
+# Width used for face detection during recognition (frame is downscaled to this)
+DETECT_WIDTH = 320
+
 # [NEW] Import Aligner
 try:
     from core.alignment import StandardFaceAligner
@@ -71,9 +74,15 @@ class FaceRecognizer:
             return [], []
 
         h, w, _ = frame.shape
-        self.detector.setInputSize((w, h))
-        
-        _, faces = self.detector.detect(frame)
+        # Detect on a smaller copy (much faster on the Pi), then scale boxes/landmarks back
+        scale = DETECT_WIDTH / w if w > DETECT_WIDTH else 1.0
+        small = cv2.resize(frame, (int(w * scale), int(h * scale))) if scale < 1.0 else frame
+        self.detector.setInputSize((small.shape[1], small.shape[0]))
+
+        _, faces = self.detector.detect(small)
+        if faces is not None and scale < 1.0:
+            faces = faces.copy()
+            faces[:, :14] /= scale
         
         face_locations = []
         face_names = []

@@ -44,7 +44,7 @@ MQTT_TOPIC_RECEIVE_USERS   = "p/a/1/receive-users"  # Subscribe — receive empl
 CAMERA_INDEX          = 0
 DETECTION_THRESHOLD   = 0.6
 RECOGNITION_THRESHOLD = 0.70
-VERIFICATION_FRAMES   = 5
+VERIFICATION_FRAMES   = 3   # same person must match this many frames during a scan
 
 # ─── Machine Relay (LED for now) ─────────────────────────────────────────────
 RELAY_GPIO_PIN    = 17     # BCM numbering (physical pin 11)

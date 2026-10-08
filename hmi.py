@@ -140,18 +140,29 @@ class ScanButton(QPushButton):
                            " max-height: 300px; padding: 0; border: none; background: transparent; }")
         self.setCursor(Qt.PointingHandCursor)
         self.scanning = False
-        self.progress = 0.0   # 0..1 while scanning
-        self.subtitle = "Tap to scan face"
+        self.stop_mode = False  # True while the machine is ON: red STOP button
+        self.progress = 0.0     # 0..1 while scanning
+        self.subtitle = "Tap to start machine"
 
     def set_ready(self):
         self.scanning = False
+        self.stop_mode = False
         self.progress = 0.0
-        self.subtitle = "Tap to scan face"
+        self.subtitle = "Tap to start machine"
+        self.setEnabled(True)
+        self.update()
+
+    def set_stop(self):
+        self.scanning = False
+        self.stop_mode = True
+        self.progress = 0.0
+        self.subtitle = "Tap to stop machine"
         self.setEnabled(True)
         self.update()
 
     def set_scanning(self, progress):
         self.scanning = True
+        self.stop_mode = False
         self.progress = max(0.0, min(1.0, progress))
         self.subtitle = f"{max(0, int(SCAN_TIMEOUT_S * (1 - self.progress) + 0.99))} s"
         self.setEnabled(False)
@@ -173,6 +184,14 @@ class ScanButton(QPushButton):
             p.setBrush(QColor(C_CARD))
             p.drawEllipse(inner)
             title, title_color, sub_color = "SCANNING", C_BLUE, C_MUTED
+        elif self.stop_mode:
+            # Soft halo + solid red STOP button
+            p.setPen(QPen(QColor(243, 139, 168, 70), 16))
+            p.drawEllipse(outer)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor("#e57a98") if self.isDown() else QColor(C_RED))
+            p.drawEllipse(inner)
+            title, title_color, sub_color = "STOP", C_BG, "#5c2333"
         else:
             # Soft halo + solid green button
             p.setPen(QPen(QColor(166, 227, 161, 70), 16))
@@ -284,9 +303,8 @@ class VideoThread(QThread):
                 self.msleep(40)
                 continue
 
-            # Processing - OPTIMIZATION: Process recognition every 3rd frame (approx 8-10 FPS)
-            # This drastically reduces CPU load without affecting user experience.
-            if current_mode == "RECOGNITION" and frame_count % 3 == 0:
+            # Recognition runs only during a START scan, so check every frame for a fast result
+            if current_mode == "RECOGNITION":
                 self.process_recognition(cv_img, last_name, consecutive)
             elif current_mode == "CAPTURE":
                 # Capture mode needs higher FPS for smooth UI feedback
@@ -302,8 +320,8 @@ class VideoThread(QThread):
             qt_img = QImage(rgb_img.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
             self.change_pixmap_signal.emit(qt_img)
             
-            # Important: Prevent CPU starvation (40ms = 25 FPS target)
-            self.msleep(40)
+            # Prevent CPU starvation; shorter pause while scanning so results come quickly
+            self.msleep(10 if current_mode == "RECOGNITION" else 40)
 
         # Cleanup
         cap.release()
@@ -532,6 +550,8 @@ class MainApp(QMainWindow):
         self.match_identity = None
         self.match_count = 0
         self.face_seen = False
+        self.machine_on = False       # relay ON after ACCESS GRANTED, OFF after STOP
+        self.operator = ("", "")      # (name, id) of the worker who started the machine
         
         self.db = LocalDatabase()
         self.relay = MachineRelay()   # machine enable output (LED for now), OFF at start
@@ -625,7 +645,7 @@ class MainApp(QMainWindow):
         brand_box.setSpacing(0)
         lbl_brand = QLabel("BIO-ACCESS")
         lbl_brand.setStyleSheet(f"color: {C_BLUE}; font-size: 26px; font-weight: bold; letter-spacing: 3px;")
-        lbl_sub = QLabel(f"Attendance Terminal  •  Device {DEVICE_ID}")
+        lbl_sub = QLabel(f"Machine Access  •  Device {DEVICE_ID}")
         lbl_sub.setStyleSheet(f"color: {C_MUTED}; font-size: 15px;")
         brand_box.addWidget(lbl_brand)
         brand_box.addWidget(lbl_sub)
@@ -652,7 +672,7 @@ class MainApp(QMainWindow):
         pb = QVBoxLayout(page_btn)
         pb.setContentsMargins(0, 0, 0, 0)
         self.btn_scan = ScanButton()
-        self.btn_scan.clicked.connect(self.start_scan)
+        self.btn_scan.clicked.connect(self.on_main_button)
         pb.addWidget(self.btn_scan, alignment=Qt.AlignCenter)
         self.home_stack.addWidget(page_btn)
 
@@ -709,6 +729,10 @@ class MainApp(QMainWindow):
             f"QPushButton:pressed {{ background-color: {C_BORDER}; }}"
             f"QPushButton:disabled {{ color: #6c7086; }}")
         self.btn_menu.clicked.connect(lambda: self.switch_screen(1))
+        self.lbl_machine = QLabel("")
+        self.lbl_machine.setFixedHeight(64)
+        self.lbl_machine.setAlignment(Qt.AlignCenter)
+        footer.addWidget(self.lbl_machine)
         footer.addWidget(self.btn_cancel_scan, stretch=1)
         footer.addStretch()
         footer.addWidget(self.btn_menu)
@@ -748,11 +772,41 @@ class MainApp(QMainWindow):
         self.home_stack.setCurrentIndex(0)
         self.lbl_clock.show()
         self.lbl_date.show()
-        self.btn_scan.set_ready()
         self.btn_cancel_scan.hide()
         self.btn_menu.setEnabled(True)
-        self.lbl_cam_hint.setText("Stand in front of the camera")
-        self.set_home_status("Ready  —  press START to mark attendance")
+        self.update_machine_pill()
+        if self.machine_on:
+            name, uid = self.operator
+            self.btn_scan.set_stop()
+            self.lbl_cam_hint.setText("Machine running")
+            self.set_home_status(f"Machine ON  —  {name}  (ID {uid})", C_GREEN)
+        else:
+            self.btn_scan.set_ready()
+            self.lbl_cam_hint.setText("Stand in front of the camera")
+            self.set_home_status("Press START to turn ON the machine")
+
+    def update_machine_pill(self):
+        on = self.machine_on
+        color = C_GREEN if on else C_MUTED
+        self.lbl_machine.setText("●  MACHINE ON" if on else "●  MACHINE OFF")
+        self.lbl_machine.setStyleSheet(
+            f"color: {color}; background-color: {C_CARD}; border: 2px solid {color if on else C_RAISED};"
+            "border-radius: 14px; padding: 0 18px; font-size: 18px; font-weight: bold;")
+        self.lbl_machine.setVisible(self.scan_state != "SCANNING")
+
+    def on_main_button(self):
+        if self.machine_on:
+            self.stop_machine()
+        else:
+            self.start_scan()
+
+    def stop_machine(self):
+        """STOP pressed: switch the relay off immediately (no face scan needed)."""
+        self.relay.off()
+        self.machine_on = False
+        self.operator = ("", "")
+        self.reset_home()
+        self.set_home_status("Machine stopped  —  press START to turn it ON", C_YELLOW)
 
     def start_scan(self):
         if self.scan_state != "IDLE":
@@ -761,6 +815,7 @@ class MainApp(QMainWindow):
         self.scan_started = time.time()
         self.match_identity, self.match_count, self.face_seen = None, 0, False
         self.btn_scan.set_scanning(0)
+        self.lbl_machine.hide()
         self.btn_cancel_scan.show()
         self.btn_menu.setEnabled(False)
         self.lbl_cam_hint.setText("Look directly at the camera")
@@ -782,15 +837,16 @@ class MainApp(QMainWindow):
     def handle_home_recognition(self, msg):
         if self.scan_state != "SCANNING":
             return
+        # An unclear frame does not reset the count; only a different person does
         if msg == "NOFACE":
-            self.match_identity, self.match_count = None, 0
             self.lbl_cam_hint.setText("No face  —  look at the camera")
-            self.set_home_status("Looking for a face...", C_BLUE)
+            if not self.match_count:
+                self.set_home_status("Looking for a face...", C_BLUE)
         elif msg == "UNKNOWN":
             self.face_seen = True
-            self.match_identity, self.match_count = None, 0
             self.lbl_cam_hint.setText("Hold still")
-            self.set_home_status("Verifying...", C_BLUE)
+            if not self.match_count:
+                self.set_home_status("Verifying...", C_BLUE)
         elif msg.startswith("MATCH:"):
             self.face_seen = True
             identity = msg[len("MATCH:"):]
@@ -808,7 +864,9 @@ class MainApp(QMainWindow):
         user_id, name = identity.split("_", 1) if "_" in identity else (identity, identity)
         self.db.add_record(DEVICE_ID, name, user_id=user_id)
         self.relay.grant()   # enable the machine
-        self.show_result("OK", "ACCESS GRANTED", name, f"ID {user_id}")
+        self.machine_on = True
+        self.operator = (name, user_id)
+        self.show_result("OK", "ACCESS GRANTED", name, f"ID {user_id}   •   Machine ON")
 
     def show_result(self, kind, title, name, detail, pill=""):
         self.scan_state = "RESULT"
@@ -835,6 +893,7 @@ class MainApp(QMainWindow):
         self.lbl_date.hide()
         self.home_stack.setCurrentIndex(1)
         self.btn_cancel_scan.hide()
+        self.update_machine_pill()
         self.btn_menu.setEnabled(True)
         self.lbl_cam_hint.setText("Thank you" if kind == "OK" else "Press START to try again")
         self.set_home_status("Returning to start...", C_MUTED)
@@ -1070,6 +1129,10 @@ class MainApp(QMainWindow):
         now = datetime.now()
         self.lbl_clock.setText(now.strftime("%H:%M:%S"))
         self.lbl_date.setText(now.strftime("%A, %d %B %Y"))
+        if self.machine_on and not self.relay.is_on:
+            self.machine_on = False
+            if self.scan_state == "IDLE":
+                self.reset_home()
         if now.second % 5 == 0:
             self.check_network_status()
 
