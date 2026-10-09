@@ -50,3 +50,15 @@ VERIFICATION_FRAMES   = 3   # same person must match this many frames during a s
 RELAY_GPIO_PIN    = 17     # BCM numbering (physical pin 11)
 RELAY_ACTIVE_HIGH = False  # relay board switches ON with a LOW signal (active-low); True for active-high boards
 RELAY_ON_SECONDS  = 0      # 0 = stay ON after ACCESS GRANTED until hmi.py stops; >0 = ON for that many seconds
+
+# ─── Machine Output selection ────────────────────────────────────────────────
+# "relay"    -> GPIO relay (device/relay.py)
+# "beckhoff" -> Beckhoff controller over ADS (device/beckhoff.py)
+# Override at start-up:  python3 hmi.py --output beckhoff
+MACHINE_OUTPUT = "relay"
+
+# ─── Beckhoff Controller (CX7000, TwinCAT 3) ─────────────────────────────────
+BECKHOFF_AMS_NET_ID = "5.177.87.98.1.1"
+BECKHOFF_PLC_IP     = "169.254.99.87"
+BECKHOFF_VARIABLE   = "MAIN.bCmd"      # BOOL: TRUE = machine / LED ON
+BECKHOFF_TIMEOUT_MS = 1000             # ADS timeout so an unreachable PLC does not freeze the HMI

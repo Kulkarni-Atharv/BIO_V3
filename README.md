@@ -117,6 +117,28 @@ The relay is OFF until a face is authenticated, then stays ON until hmi.py stops
 the pin instead of driving it HIGH (3.3V does not switch a 5V board off).
 Test the wiring with `python3 device/relay.py` - OFF for 2 s, ON for 2 s, then OFF.
 
+### Machine output: relay or Beckhoff controller
+The machine enable signal can go to the GPIO relay **or** to a Beckhoff controller (CX7000, TwinCAT 3) over ADS:
+
+```bash
+python3 hmi.py                     # relay (default, MACHINE_OUTPUT in shared/config.py)
+python3 hmi.py --output relay
+python3 hmi.py --output beckhoff   # writes BECKHOFF_VARIABLE (MAIN.bCmd) TRUE / FALSE
+```
+
+| Setting | Purpose | Default |
+|---|---|---|
+| `MACHINE_OUTPUT` | Output used when `--output` is not given | `"relay"` |
+| `BECKHOFF_AMS_NET_ID` | AMS Net ID of the controller | `5.177.87.98.1.1` |
+| `BECKHOFF_PLC_IP` | Controller IP address | `169.254.99.87` |
+| `BECKHOFF_VARIABLE` | BOOL variable: TRUE = machine ON | `MAIN.bCmd` |
+| `BECKHOFF_TIMEOUT_MS` | ADS timeout | `1000` |
+
+ACCESS GRANTED writes TRUE, STOP writes FALSE, closing hmi.py writes FALSE. If the controller cannot be reached the HMI
+shows **MACHINE NOT STARTED** (on START) or **Could not stop machine** (on STOP, the STOP button stays available).
+Beckhoff mode needs `pip install pyads` and an ADS route between the Pi and the controller.
+Interactive test (on / off / status / quit): `python3 device/beckhoff.py`.
+
 ## Usage
 Always activate the environment first:
 ```bash

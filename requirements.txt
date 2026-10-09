@@ -3,6 +3,9 @@ numpy
 requests
 paho-mqtt
 
+# Beckhoff controller output (only for: python3 hmi.py --output beckhoff)
+pyads
+
 # Face recognition
 opencv-python-headless
 # Use opencv-python if you need a display locally

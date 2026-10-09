@@ -27,7 +27,7 @@ from core.face_guide import RegistrationGuide, crop_face, MIN_VALID_SAMPLES
 from device.camera import open_usb_camera
 from device.relay import MachineRelay
 from shared.config import (
-    DEVICE_ID, KNOWN_FACES_DIR, NAMES_FILE, VERIFICATION_FRAMES,
+    DEVICE_ID, KNOWN_FACES_DIR, NAMES_FILE, VERIFICATION_FRAMES, MACHINE_OUTPUT,
     MQTT_BROKER, MQTT_PORT, MQTT_USERNAME, MQTT_PASSWORD,
     MQTT_TOPIC_RECEIVE_USERS, MQTT_TOPIC_REQUEST_USERS
 )
@@ -644,9 +644,17 @@ class MQTTWorker(QThread):
     def stop(self):
         self._stop_flag = True
 
+def create_machine_output(kind):
+    """'relay' -> GPIO relay, 'beckhoff' -> Beckhoff controller over ADS."""
+    if kind == "beckhoff":
+        from device.beckhoff import BeckhoffOutput   # needs pyads only in this mode
+        return BeckhoffOutput()
+    return MachineRelay()
+
+
 # --- MAIN APP ---
 class MainApp(QMainWindow):
-    def __init__(self):
+    def __init__(self, output=MACHINE_OUTPUT):
         super().__init__()
         self.setWindowTitle("Autonex SmartAccess")
         self.setStyleSheet(STYLE_MAIN)
@@ -661,7 +669,9 @@ class MainApp(QMainWindow):
         self.operator = ("", "")      # (name, id) of the worker who started the machine
         
         self.db = LocalDatabase()
-        self.relay = MachineRelay()   # machine enable output (LED for now), OFF at start
+        # Machine enable output (LED for now), OFF at start: GPIO relay or Beckhoff controller
+        self.machine_out = create_machine_output(output)
+        self.machine_out_name = "Beckhoff PLC" if output == "beckhoff" else "Relay"
         
         self.central_widget = QStackedWidget()
         self.setCentralWidget(self.central_widget)
@@ -756,7 +766,7 @@ class MainApp(QMainWindow):
         brand_box.setSpacing(0)
         lbl_brand = QLabel("Autonex SmartAccess")
         lbl_brand.setStyleSheet(f"color: {C_BLUE}; font-size: 26px; font-weight: bold; letter-spacing: 1px;")
-        lbl_sub = QLabel(f"Machine Access  •  Device {DEVICE_ID}")
+        lbl_sub = QLabel(f"Machine Access  •  Device {DEVICE_ID}  •  {self.machine_out_name}")
         lbl_sub.setStyleSheet(f"color: {C_MUTED}; font-size: 15px;")
         brand_box.addWidget(lbl_brand)
         brand_box.addWidget(lbl_sub)
@@ -913,7 +923,10 @@ class MainApp(QMainWindow):
 
     def stop_machine(self):
         """STOP pressed: switch the relay off immediately (no face scan needed)."""
-        self.relay.off()
+        if self.machine_out.off() is False:
+            # Controller unreachable: the machine may still be running, keep STOP available
+            self.set_home_status("Could not stop machine  —  controller not reachable", C_RED)
+            return
         self.machine_on = False
         self.operator = ("", "")
         self.reset_home()
@@ -974,7 +987,10 @@ class MainApp(QMainWindow):
         # Folder / identity format is "ID_Name" (or just "Name" for old data)
         user_id, name = identity.split("_", 1) if "_" in identity else (identity, identity)
         self.db.add_record(DEVICE_ID, name, user_id=user_id)
-        self.relay.grant()   # enable the machine
+        if self.machine_out.grant() is False:   # enable the machine
+            self.show_result("FAIL", "MACHINE NOT STARTED", name,
+                             "Controller not reachable  —  check the connection")
+            return
         self.machine_on = True
         self.operator = (name, user_id)
         self.show_result("OK", "ACCESS GRANTED", name, f"ID {user_id}   •   Machine ON")
@@ -1240,7 +1256,7 @@ class MainApp(QMainWindow):
         now = datetime.now()
         self.lbl_clock.setText(now.strftime("%H:%M:%S"))
         self.lbl_date.setText(now.strftime("%A, %d %B %Y"))
-        if self.machine_on and not self.relay.is_on:
+        if self.machine_on and not self.machine_out.is_on:
             self.machine_on = False
             if self.scan_state == "IDLE":
                 self.reset_home()
@@ -1819,7 +1835,7 @@ class MainApp(QMainWindow):
         self.switch_screen(2)  # Go to Register screen (index 2)
 
     def closeEvent(self, event):
-        self.relay.close()
+        self.machine_out.close()
         self.thread.stop()
         self.mqtt_worker.stop()
         self.mqtt_worker.wait()
@@ -1879,14 +1895,22 @@ if __name__ == "__main__":
         
     sys.excepthook = exception_hook
 
-    app = QApplication(sys.argv)
+    # Machine output: python3 hmi.py --output relay | beckhoff  (default from shared/config.py)
+    import argparse
+    parser = argparse.ArgumentParser(description="Autonex SmartAccess HMI")
+    parser.add_argument("--output", choices=["relay", "beckhoff"], default=MACHINE_OUTPUT,
+                        help="machine enable output (default: %(default)s)")
+    args, qt_args = parser.parse_known_args()
+    print(f"Machine output: {args.output}")
+
+    app = QApplication(sys.argv[:1] + qt_args)
     
     # Font (falls back to the system sans font on Raspberry Pi OS)
     font = QFont("Segoe UI", 12)
     app.setFont(font)
 
     try:
-        window = MainApp()
+        window = MainApp(output=args.output)
         window.showFullScreen()  # kiosk: fill the whole 1280x720 panel
         sys.exit(app.exec_())
     except Exception as e:
