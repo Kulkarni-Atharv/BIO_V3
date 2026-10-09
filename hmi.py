@@ -671,7 +671,6 @@ class MainApp(QMainWindow):
         self.db = LocalDatabase()
         # Machine enable output (LED for now), OFF at start: GPIO relay or Beckhoff controller
         self.machine_out = create_machine_output(output)
-        self.machine_out_name = "Beckhoff PLC" if output == "beckhoff" else "Relay"
         
         self.central_widget = QStackedWidget()
         self.setCentralWidget(self.central_widget)
@@ -766,14 +765,12 @@ class MainApp(QMainWindow):
         brand_box.setSpacing(0)
         lbl_brand = QLabel("Autonex SmartAccess")
         lbl_brand.setStyleSheet(f"color: {C_BLUE}; font-size: 26px; font-weight: bold; letter-spacing: 1px;")
-        lbl_sub = QLabel(f"Machine Access  •  Device {DEVICE_ID}  •  {self.machine_out_name}")
+        lbl_sub = QLabel(f"Machine Access  •  Device {DEVICE_ID}")
         lbl_sub.setStyleSheet(f"color: {C_MUTED}; font-size: 15px;")
         brand_box.addWidget(lbl_brand)
         brand_box.addWidget(lbl_sub)
-        self.lbl_net = QLabel("●  OFFLINE")
         header.addLayout(brand_box)
         header.addStretch()
-        header.addWidget(self.lbl_net, alignment=Qt.AlignTop)
         v.addLayout(header)
 
         # Clock
@@ -875,7 +872,6 @@ class MainApp(QMainWindow):
         self.result_timer.timeout.connect(self.reset_home)
 
         self.update_home_ui()
-        self.check_network_status()
         self.central_widget.addWidget(self.home_widget)
 
     # --- HOME: SCAN FLOW ---
@@ -1260,23 +1256,6 @@ class MainApp(QMainWindow):
             self.machine_on = False
             if self.scan_state == "IDLE":
                 self.reset_home()
-        if now.second % 5 == 0:
-            self.check_network_status()
-
-    def check_network_status(self):
-        try:
-            # UDP "connect" sends no packets; it only selects the outgoing interface
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-            s.close()
-            text, color = f"●  {ip}", C_GREEN
-        except Exception:
-            text, color = "●  OFFLINE", C_RED
-        self.lbl_net.setText(text)
-        self.lbl_net.setStyleSheet(
-            f"color: {color}; background-color: {C_CARD}; border: 1px solid {C_RAISED};"
-            "border-radius: 16px; padding: 6px 14px; font-size: 16px; font-weight: bold;")
 
     def switch_screen(self, index):
         if hasattr(self, "keyboard"):
